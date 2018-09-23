@@ -1,10 +1,7 @@
 from setuptools import setup, find_packages
 
 REQUIRED_PACKAGES = [
-    #'google-cloud-storage==1.10.0'
-    #'google-cloud-dataflow==2.4.0',
-    #'tensorflow-transform==0.6.0',
-    #'tensorflow==1.6'
+    #'tensorflow==1.8'
 ]
 
 setup(
