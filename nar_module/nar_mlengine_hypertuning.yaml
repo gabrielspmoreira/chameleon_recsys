@@ -1,0 +1,59 @@
+trainingInput:
+  runtimeVersion: "1.8"
+  scaleTier: basic-gpu
+  hyperparameters:
+      goal: MAXIMIZE
+      hyperparameterMetricTag: mrr_at_n
+      maxTrials: 30
+      maxParallelTrials: 2
+      params:
+        - parameterName: batch_size
+          type: DISCRETE
+          discreteValues: 
+          - 64
+          - 128
+          - 256
+        - parameterName: train_total_negative_samples
+          type: DISCRETE
+          discreteValues: 
+          - 5
+          - 7
+          - 10
+        - parameterName: CAR_embedding_size
+          type: DISCRETE
+          discreteValues:
+          - 256
+          - 512
+          - 1024
+        - parameterName: rnn_units
+          type: DISCRETE
+          discreteValues: 
+          - 256
+          - 512
+          - 1024
+        - parameterName: learning_rate
+          type: DISCRETE
+          discreteValues: 
+          - 0.0001
+          - 0.0005
+          - 0.001
+        - parameterName: dropout_keep_prob
+          type: DISCRETE
+          discreteValues:
+          - 0.8
+          - 0.9
+          - 1.0
+        - parameterName: reg_l2
+          type: DISCRETE
+          discreteValues: 
+          - 0.00001
+          - 0.00005
+          - 0.0001
+        - parameterName: cosine_loss_gamma
+          type: DISCRETE
+          discreteValues:
+          - 1.0
+          - 2.0
+          - 3.0
+              
+

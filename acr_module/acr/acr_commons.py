@@ -1,0 +1,2 @@
+PAD_TOKEN = '<PAD>'
+UNK_TOKEN = '<UNK>'
