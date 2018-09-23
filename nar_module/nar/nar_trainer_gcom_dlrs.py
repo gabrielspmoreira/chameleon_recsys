@@ -68,7 +68,7 @@ tf.flags.DEFINE_string('warmup_model_dir', default=None,
 tf.flags.DEFINE_integer('train_files_from', default=0, help='Train model starting from file N')
 tf.flags.DEFINE_integer('train_files_up_to', default=100, help='Train model up to file N')
 tf.flags.DEFINE_integer('training_hours_for_each_eval', default=5, help='Train model for N hours before evaluation of the next hour')
-tf.flags.DEFINE_integer('save_results_each_n_evals', default=5, help='Saves to disk and uploads to GCS (ML Engine) the incremental evaluation results each N evaluations')
+tf.flags.DEFINE_integer('save_results_each_n_evals', default=1, help='Saves to disk and uploads to GCS (ML Engine) the incremental evaluation results each N evaluations')
 tf.flags.DEFINE_bool('save_eval_sessions_negative_samples', default=False, help='Save negative samples of each session during evaluation')
 tf.flags.DEFINE_bool('use_local_cache_model_dir', default=False, help='Persists checkpoints and events in a local temp file, copying to GCS in the end of the process (useful for ML Engine jobs, because saving and loading checkpoints slows training job)')
 #Default param used by ML Engine to validate whether the path exists

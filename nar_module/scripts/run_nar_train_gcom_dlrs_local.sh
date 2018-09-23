@@ -11,7 +11,6 @@ python3 -m nar.nar_trainer_gcom_dlrs \
 	--train_files_from 0 \
 	--train_files_up_to 72 \
 	--training_hours_for_each_eval 5 \
-	--save_results_each_n_evals 3 \
 	--acr_module_articles_metadata_csv_path ${DATA_DIR}/articles_metadata.csv \
 	--acr_module_articles_content_embeddings_pickle_path ${DATA_DIR}/articles_embeddings.pickle \
 	--batch_size 256 \
