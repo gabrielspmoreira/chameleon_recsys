@@ -10,6 +10,10 @@ This implementation depends on **Python 3** (with Pandas, Scikit-learn and SciPy
 
 The CHAMELEON modules training and evaluation can be performed either locally (GPU highly recommended) or using [Google Cloud Platform ML Engine](https://cloud.google.com/ml-engine/) managed service.
 
+## Dataset for reproducibility
+The dataset used in paper experiments was kindly shared by [Globo.com](http://globo.com), and made available for reproducibility of the results and also for academic purposes at [Kaggle Datasets](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom).  
+You must download that dataset to be able to run the commands to pre-process, train, and evaluate the CHAMELEON's NAR module, which provides next-click recommendation for user sessions.
+
 # CHAMELEON
 The objetive of the CHAMELEON is to provide accurate contextual session-based recommendations for news portals. It is composed of two complementary modules, with independent life cycles for training and inference: the *Article Content Representation (ACR)* and the *Next-Article Recommendation (NAR)* modules, as shown in Figure 1.
 
@@ -29,10 +33,12 @@ For scalability reasons, *Article Content Embeddings* are not directly trained f
 
 After training, the *Article Content Embeddings* for news articles (NumPy matrix) are persisted into a Pickle dump file, for further usage by *NAR* module.
 
+*P.s. The following subsections commands for ACR module pre-processing and training are not necessary for reproducibility of the paper, since the trained Article Content Embeddings were already been provided in the Globo.com dataset.*
+
 ### Pre-processing data for the ACR module
 Here is an example of the command for pre-processing articles text and metadata for the *ACR* module
 
-It allows to specify the path of a CSV containing articles text and metadata (*input_articles_csv_path*), the path of pre-trained word embeddings (*input_word_embeddings_path*) in [Gensim format](https://radimrehurek.com/gensim/models/word2vec.html) and exports articles data into TFRecords format into *output_tf_records_path*, including the dictionaries that mapped tokenized words to sequences of int (*output_word_vocab_embeddings_path*) and metadata the categorical features encoders (*output_label_encoders*).
+It allows to specify the path of a CSV containing articles text and metadata (*input_articles_csv_path*), the path of pre-trained word embeddings (*input_word_embeddings_path*) in [Gensim format](https://radimrehurek.com/gensim/models/word2vec.html) and exports articles data into TFRecords format into *output_tf_records_path*, including the dictionaries that mapped tokenized words to sequences of int (*output_word_vocab_embeddings_path*) and metadata the categorical features encoders (*output_label_encoders*). 
 
 ```bash
 cd acr_module && \
