@@ -1,5 +1,5 @@
 trainingInput:
-  runtimeVersion: "1.8"
+  runtimeVersion: "1.12"
   scaleTier: basic-gpu
   hyperparameters:
       goal: MAXIMIZE
@@ -49,11 +49,5 @@ trainingInput:
           - 0.00001
           - 0.00005
           - 0.0001
-        - parameterName: cosine_loss_gamma
-          type: DISCRETE
-          discreteValues:
-          - 1.0
-          - 2.0
-          - 3.0
               
 

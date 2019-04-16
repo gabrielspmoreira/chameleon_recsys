@@ -3,9 +3,14 @@ import numpy as np
 import tensorflow as tf
 
 
+def multi_label_predictions_binarizer(predictions, threshold=0.5):
+    predictions = tf.sigmoid(predictions)
+    return tf.cast(tf.greater(predictions, threshold), tf.int64)
+
 class ACR_Model:
     
-    def __init__(self, text_feature_extractor, features, metadata_features, metadata_feature_columns, labels, mode, params):
+    def __init__(self, text_feature_extractor, features, 
+                 metadata_input_features, metadata_input_feature_columns, labels, labels_features_config, mode, params):
         self.params = params
         dropout_keep_prob = params['dropout_keep_prob']
         l2_reg_lambda = params['l2_reg_lambda']
@@ -13,10 +18,34 @@ class ACR_Model:
         training = mode == tf.estimator.ModeKeys.TRAIN
 
         with tf.variable_scope("main", initializer=tf.contrib.layers.variance_scaling_initializer()):
+            input_features = []
+
+            #Creating a tensor for class weights of each label
+            labels_classes_weights = {}
+            for label_column_name in params['labels_class_weights']:
+                labels_classes_weights[label_column_name] = tf.constant(params['labels_class_weights'][label_column_name], tf.float32)
+
             with tf.variable_scope("input_article_metadata"):
-                metadata_features = tf.feature_column.input_layer(metadata_features, 
-                                                                  metadata_feature_columns)
-                print("Metadata features: {}".format(metadata_features.get_shape()))
+                #If there is articles metadata available for the model
+                if metadata_input_features is not None and len(metadata_input_features) > 0:
+                    metadata_features = tf.feature_column.input_layer(metadata_input_features, 
+                                                                    metadata_input_feature_columns)
+
+                    tf.logging.info("Metadata features shape: {}".format(metadata_features.get_shape()))
+
+                    #Creating a FC layer on top of metadata features (usually OHE categorical features) to make it dense (like the CNN output)
+                    num_metadata_inputs = max(int(int(metadata_features.get_shape()[-1]) / 4), 2)
+                    hidden_metadata = tf.layers.dense(inputs=metadata_features, units=num_metadata_inputs, 
+                                             activation=tf.nn.relu,
+                                             kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg_lambda))
+
+                    tf.logging.info("Hidden Metadata features shape: {}".format(hidden_metadata.get_shape()))
+
+                    input_features.append(hidden_metadata)
+                    
+
+                    #tf.summary.histogram('multi_hot', 
+                    #              values=tf.reduce_sum(metadata_features[:,1:], axis=1))
 
 
             with tf.variable_scope("input_word_embeddings"):
@@ -29,6 +58,7 @@ class ACR_Model:
                                 )
 
             with tf.variable_scope("textual_features_representation"):
+                
                 if text_feature_extractor.upper() == 'CNN':
                     content_features = self.cnn_feature_extractor(input_text_layer)
                 elif text_feature_extractor.upper() == 'RNN':
@@ -36,38 +66,97 @@ class ACR_Model:
                 else:
                     raise Exception('Text feature extractor option invalid! Valid values are: CNN, RNN')
 
-                content_metadata_features = tf.concat([content_features, metadata_features], axis=-1)
-                #print('content_metadata_features.shape', content_metadata_features.get_shape())
-                
-                dropout_conv_layers_concat = tf.layers.dropout(inputs=content_metadata_features, 
+                input_features.append(content_features)
+
+                input_features_concat = tf.concat(input_features, axis=-1)
+                tf.logging.info("input_features_concat.shape={}".format(input_features_concat.get_shape()))
+
+                dropout_conv_layers_concat = tf.layers.dropout(inputs=input_features_concat,#input_features_concat, 
                                                    rate=1.0-dropout_keep_prob, 
                                                    training=training)
 
+                #Testing a new FC
+                fc2 = tf.layers.dense(inputs=dropout_conv_layers_concat, units=params['acr_embeddings_size'], 
+                                             activation=tf.nn.relu,
+                                             kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg_lambda))
+
                 with tf.variable_scope("article_content_embedding"):
-                    hidden = tf.layers.dense(inputs=dropout_conv_layers_concat, units=params['acr_embeddings_size'], 
-                        activation=tf.nn.tanh,
+                    hidden = tf.layers.dense(inputs=fc2, units=params['acr_embeddings_size'], 
+                                             activation=tf.nn.tanh,
                                              kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg_lambda),
                                              kernel_initializer=tf.contrib.layers.xavier_initializer())
                     self.article_content_embedding = hidden
                     #print('article_content_embedding.shape', self.article_content_embedding.get_shape())
 
             
-            with tf.variable_scope("metadata_prediction"):
+            with tf.variable_scope("network_output"):
                 dropout_hidden = tf.layers.dropout(inputs=hidden, 
                                                    rate=1.0-dropout_keep_prob, 
                                                    training=training)
 
-                logits = tf.layers.dense(inputs=dropout_hidden, units=params['classes_count'],
-                                         kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg_lambda))
-                #print('logits.shape', logits.get_shape())
-                
-                self.predictions = tf.argmax(logits, 1)
-            
-            
+                labels_logits = {}
+                self.labels_predictions = {}
+
+                for label_feature_name in labels_features_config:
+                    with tf.variable_scope("output_{}".format(label_feature_name)):
+
+                        label_feature = labels_features_config[label_feature_name]
+
+                        labels_logits[label_feature_name] = tf.layers.dense(inputs=dropout_hidden, units=label_feature['cardinality'],
+                                                                            kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg_lambda),
+                                                                            activation=None)
+
+                        if labels_features_config[label_feature_name]['classification_type'] == 'multiclass':
+                            self.labels_predictions[label_feature_name] = tf.argmax(labels_logits[label_feature_name], 1)
+                        
+                        elif labels_features_config[label_feature_name]['classification_type'] == 'multilabel':
+                            #If its a multi-label head, convert labels in multi-hot representation
+                            self.labels_predictions[label_feature_name] = multi_label_predictions_binarizer(labels_logits[label_feature_name])
+
             if mode != tf.estimator.ModeKeys.PREDICT:
                 with tf.variable_scope("loss"):
-                    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels))
-                    tf.summary.scalar('cross_entropy_loss', family='train', tensor=loss)
+                    loss = tf.constant(0.0, tf.float32)
+
+                    for label_feature_name in labels_features_config:
+                        if labels_features_config[label_feature_name]['classification_type'] == 'multiclass':
+                            #label_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=labels_logits[label_feature_name], 
+                            #                                                                        labels=labels[label_feature_name]))
+                            
+                            #If the label feature have classes weights, use the weights to deal with unbalanced classes
+                            weights=tf.constant(1.0)
+                            if label_column_name in labels_classes_weights:
+                                weights=tf.gather(labels_classes_weights[label_column_name], labels[label_feature_name])
+                                
+                            label_loss = tf.reduce_mean(tf.losses.sparse_softmax_cross_entropy(logits=labels_logits[label_feature_name], 
+                                                                                           labels=labels[label_feature_name],
+                                                                                           weights=weights))
+                            tf.summary.scalar('softmax_cross_entropy_loss-{}'.format(label_feature_name), 
+                                          family='train', tensor=label_loss)
+
+                        elif labels_features_config[label_feature_name]['classification_type'] == 'multilabel':
+                            #Tuning the label into multi-hot representation
+                            labels[label_feature_name] = tf.reduce_sum(tf.one_hot(indices=labels[label_feature_name], 
+                                                                       depth=labels_features_config[label_feature_name]['cardinality']
+                                                                       ), reduction_indices=1)
+                            
+                            #Forcing that label of padding value is always zero
+                            labels[label_feature_name] = tf.multiply(labels[label_feature_name],
+                                                                     tf.concat([tf.constant([0], tf.float32), tf.ones(tf.shape(labels[label_feature_name])[-1]-1, tf.float32)], axis=0))
+
+                            #tf.summary.histogram('multilabel_count_{}'.format(label_feature_name), 
+                            #      values=tf.reduce_sum(labels[label_feature_name], axis=1))
+
+                            tf.logging.info("labels_multi_hot.shape = {}".format(labels[label_feature_name].get_shape()))
+
+                            label_loss = tf.reduce_mean(tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels[label_feature_name],
+                                                                    logits=labels_logits[label_feature_name]), axis=1))
+                            tf.summary.scalar('sigmoid-cross_entropy_loss-{}'.format(label_feature_name), 
+                                          family='train', tensor=label_loss)
+
+                        feature_weight_on_loss = labels_features_config['feature_weight_on_loss'] if 'feature_weight_on_loss' in labels_features_config else 1.0
+                        loss += feature_weight_on_loss * label_loss                    
+                    
+                    tf.summary.scalar('cross_entropy_loss-total', family='train', tensor=loss)
 
                     reg_loss = tf.losses.get_regularization_loss()
                     tf.summary.scalar("reg_loss", family='train', tensor=reg_loss)
@@ -86,10 +175,38 @@ class ACR_Model:
                                                             summaries=["learning_rate", "global_gradient_norm"])
 
                 with tf.variable_scope("eval_metrics"):
-                    self.accuracy, self.accuracy_update_op = \
-                            tf.metrics.accuracy(predictions=self.predictions, 
-                                                labels=labels,
-                                                name='accuracy')           
+
+                    self.eval_metrics = {}
+
+                    for label_feature_name in labels_features_config:
+
+                        #tf.logging.info("{}-labels_predictions: {}".format(label_feature_name, self.labels_predictions[label_feature_name].get_shape()))
+                        #tf.logging.info("{}-labels: {}".format(label_feature_name, labels[label_feature_name].get_shape()))
+
+                        if labels_features_config[label_feature_name]['classification_type'] == 'multiclass':
+                            accuracy, accuracy_update_op = \
+                                    tf.metrics.accuracy(predictions=self.labels_predictions[label_feature_name], 
+                                                        labels=labels[label_feature_name],
+                                                        name="accuracy-{}".format(label_feature_name))  
+
+                            self.eval_metrics["accuracy-{}".format(label_feature_name)] = (accuracy, accuracy_update_op)
+
+                        elif labels_features_config[label_feature_name]['classification_type'] == 'multilabel':
+
+                            precision, precision_update_op = \
+                                    tf.metrics.precision(predictions=self.labels_predictions[label_feature_name], 
+                                                        labels=labels[label_feature_name],
+                                                        name="precision-{}".format(label_feature_name))  
+
+                            self.eval_metrics["precision-{}".format(label_feature_name)] = (precision, precision_update_op)
+
+                            recall, recall_update_op = \
+                                    tf.metrics.recall(predictions=self.labels_predictions[label_feature_name], 
+                                                        labels=labels[label_feature_name],
+                                                        name="recall-{}".format(label_feature_name))  
+
+                            self.eval_metrics["recall-{}".format(label_feature_name)] = (recall, recall_update_op)
+
 
 
                 with tf.variable_scope("stats"):

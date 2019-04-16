@@ -9,11 +9,11 @@ JOBS_STAGING_DIR="[REPLACE BY A GCS PATH FOR STAGING. e.g. gs://mlengine_staging
 echo 'Running training job '${JOB_ID} && \
 gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--package-path nar \
-	--module-name nar.nar_trainer_gcom_dlrs \
+	--module-name nar.nar_trainer_gcom \
 	--staging-bucket ${JOBS_STAGING_DIR} \
 	--region us-central1 \
 	--python-version 3.5 \
-	--runtime-version 1.8 \
+	--runtime-version 1.12 \
 	--scale-tier basic-gpu \
 	--job-dir ${MODEL_DIR} \
 	-- \
@@ -21,27 +21,35 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--use_local_cache_model_dir \
 	--train_set_path_regex "${DATA_DIR}/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
 	--train_files_from 0 \
-	--train_files_up_to 72 \
+	--train_files_up_to 384 \
 	--training_hours_for_each_eval 5 \
-	--save_results_each_n_evals 3 \
+	--save_results_each_n_evals 1 \
 	--acr_module_articles_metadata_csv_path ${DATA_DIR}/articles_metadata.csv \
 	--acr_module_articles_content_embeddings_pickle_path ${DATA_DIR}/articles_embeddings.pickle \
 	--batch_size 256 \
 	--truncate_session_length 20 \
-	--learning_rate 0.001 \
+	--learning_rate 1e-4 \
 	--dropout_keep_prob 1.0 \
-	--reg_l2 0.0001 \
-	--cosine_loss_gamma 5.0 \
-	--recent_clicks_buffer_size 2000 \
-	--eval_metrics_top_n 5 \
+	--reg_l2 1e-5 \
+	--softmax_temperature 0.1 \
+	--recent_clicks_buffer_hours 1.0 \
+	--recent_clicks_buffer_max_size 20000 \
+	--recent_clicks_for_normalization 2000 \
+	--eval_metrics_top_n 10 \
 	--CAR_embedding_size 1024 \
 	--rnn_units 255 \
-	--rnn_num_layers 1 \
-	--train_total_negative_samples 7 \
-	--train_negative_samples_from_buffer 10 \
+	--rnn_num_layers 2 \
+	--train_total_negative_samples 50 \
+	--train_negative_samples_from_buffer 3000 \
 	--eval_total_negative_samples 50 \
-	--eval_negative_samples_from_buffer 50 \
-	--save_eval_sessions_negative_samples
+	--eval_negative_samples_from_buffer 3000 \
+	--eval_negative_sample_relevance 0.02 \
+	--enabled_articles_input_features_groups "category" \
+	--enabled_clicks_input_features_groups "time,device,location,referrer" \
+	--enabled_internal_features "item_clicked_embeddings,recency,novelty,article_content_embeddings" \
+	--novelty_reg_factor 0.0
 
-#To warm start model with previously trained model:
-#--warmup_model_dir "gs://chameleon_jobs/gcom/nar_module/gabrielpm_gcom_nar_2018_08_23_230202" \
+#--save_histograms
+#--save_eval_sessions_recommendations
+#--save_eval_sessions_negative_samples
+#--disable_eval_benchmarks

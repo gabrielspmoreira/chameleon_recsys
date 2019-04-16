@@ -17,6 +17,7 @@ def load_acr_module_resources(acr_module_resources_path):
     return acr_label_encoders, articles_metadata_df, content_article_embeddings
 
 
+
 def load_nar_module_preprocessing_resources(nar_module_preprocessing_resources_path):
     #{'nar_label_encoders', 'nar_standard_scalers'}
     nar_resources = \
@@ -39,7 +40,7 @@ def save_eval_benchmark_metrics_csv(eval_sessions_metrics_log, output_dir,
     metrics_df.to_csv(csv_output_path, index=False)        
 
 def upload_model_output_to_gcs(local_dir_path, gcs_model_dir, files_pattern=None):
-    re_search = re.search(r'gs://([a-z_]+)/', gcs_model_dir)
+    re_search = re.search(r'gs://([a-z0-9_]+)/', gcs_model_dir)
     if re_search:
         #Removing bucket prefix
         bucket_prefix = re_search.group(0)

@@ -16,9 +16,9 @@ class ItemKNNRecommender(BenchmarkRecommender):
         super().__init__(clicked_items_state, params, eval_streaming_metrics)
 
         #Regularization. Discounts the similarity of rare items (incidental co-occurrences). 
-        self.reg_lambda = 20
+        self.reg_lambda = params['reg_lambda']
         #Balance between normalizing with the supports of the two items. 0.5 gives cosine similarity, 1.0 gives confidence (as in association rules).
-        self.alpha = 0.5
+        self.alpha = params['alpha']
         
     def get_clf_suffix(self):
         return 'item_knn'

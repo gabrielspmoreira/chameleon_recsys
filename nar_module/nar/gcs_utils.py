@@ -9,9 +9,12 @@ def get_dir_recursive_files(base_dir):
     return list(relative_paths)
 
 def upload_local_file_to_gcs(local_file_path, gcs_bucket, gcs_relative_path):
+	CHUNK_SIZE = 10485760  # 10MB
 	client = storage.Client()
 	bucket = client.get_bucket(gcs_bucket)
-	blob = bucket.blob(gcs_relative_path)
+	blob = bucket.blob(gcs_relative_path, 
+					   chunk_size=CHUNK_SIZE
+					   )
 
 	blob.upload_from_filename(local_file_path)
 

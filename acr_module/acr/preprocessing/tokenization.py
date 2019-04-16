@@ -30,8 +30,11 @@ def tokenize_text(text, clean_str_fn, lower_first_word_sentence=False):
 
     return tokenized_text  
 
-def tokenize_articles(articles, clean_str_fn):
-    tokenized_articles = [tokenize_text(text, clean_str_fn) for text in articles]
+def tokenize_articles(articles, tokenization_fn=None, clean_str_fn=lambda x: x):
+    if tokenization_fn == None:
+        tokenized_articles = [tokenize_text(text, clean_str_fn) for text in articles]
+    else:
+        tokenized_articles = [tokenization_fn(text) for text in articles]
     return tokenized_articles
 
 def print_vocab_tokens_stats(tokenized_int_texts, texts_lengths, word_vocab):

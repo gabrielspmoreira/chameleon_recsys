@@ -9,7 +9,7 @@ JOBS_STAGING_DIR="[REPLACE BY A GCS PATH FOR STAGING. e.g. gs://mlengine_staging
 echo 'Running training job '${JOB_ID} && \
 gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--package-path nar \
-	--module-name nar.nar_trainer_gcom_dlrs \
+	--module-name nar.nar_trainer_gcom \
 	--staging-bucket ${JOBS_STAGING_DIR} \
 	--region us-central1 \
 	--python-version 3.5 \
@@ -19,18 +19,25 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	-- \
 	--model_dir ${MODEL_DIR} \
 	--use_local_cache_model_dir \
-	--train_set_path_regex "${DATA_DIR}/data_preprocessed_open_dlrs/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
+	--train_set_path_regex "${DATA_DIR}/data_preprocessed/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
 	--train_files_from 0 \
 	--train_files_up_to 48 \
 	--training_hours_for_each_eval 5 \
-	--save_results_each_n_evals 3 \
+	--save_results_each_n_evals 1 \
 	--acr_module_articles_metadata_csv_path ${DATA_DIR}/articles_metadata.csv \
 	--acr_module_articles_content_embeddings_pickle_path ${DATA_DIR}/articles_embeddings.pickle \
 	--truncate_session_length 20 \
-	--recent_clicks_buffer_size 2000 \
-	--eval_metrics_top_n 5 \
-	--rnn_num_layers 1 \
-	--train_negative_samples_from_buffer 10 \
+	--softmax_temperature 0.1 \
+	--recent_clicks_buffer_hours 1.0 \
+	--recent_clicks_buffer_max_size 20000 \
+	--recent_clicks_for_normalization 2000 \
+	--eval_metrics_top_n 10 \
+	--rnn_num_layers 2 \
+	--train_negative_samples_from_buffer 3000 \
 	--eval_total_negative_samples 50 \
-	--eval_negative_samples_from_buffer 50 \
-	--disable_eval_benchmarks
+	--eval_negative_samples_from_buffer 3000 \
+	--eval_negative_sample_relevance 0.02 \
+	--enabled_articles_input_features_groups "category" \
+	--enabled_clicks_input_features_groups "time,device,location,referrer" \
+	--enabled_internal_features "recency,novelty,article_content_embeddings,item_clicked_embeddings" \
+	--novelty_reg_factor 0.0

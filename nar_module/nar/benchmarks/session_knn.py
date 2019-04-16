@@ -103,7 +103,7 @@ class SessionBasedKNNRecommender(BenchmarkRecommender):
         #to speed KNN search
         for session_id, session_items in zip(sessions_ids, sessions_items_sets):
             for item_id in session_items:
-                self.item_session_map[item_id].add(session_id)
+                self.item_session_map[item_id].add(session_id)        
 
         #Keeping buffer on specified size
         while len(self.last_sessions_buffer) > self.sessions_buffer_size:

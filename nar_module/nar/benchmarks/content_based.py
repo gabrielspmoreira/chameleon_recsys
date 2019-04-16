@@ -26,7 +26,11 @@ class ContentBasedRecommender(BenchmarkRecommender):
         acr_embeddings = self.eval_benchmark_params['content_article_embeddings_matrix']
 
         recent_items_buffer = self.clicked_items_state.get_recent_clicks_buffer()
-        recent_unique_item_ids = np.unique(recent_items_buffer[np.nonzero(recent_items_buffer)])
+        if valid_items is None:
+            recent_unique_item_ids = np.unique([recent_items_buffer[np.nonzero(recent_items_buffer)]])            
+        else:
+            recent_unique_item_ids = np.unique(valid_items)
+            
         acr_embeddings_recent_items = acr_embeddings[recent_unique_item_ids]
 
 

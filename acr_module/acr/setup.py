@@ -1,12 +1,12 @@
 from setuptools import setup, find_packages
 
 REQUIRED_PACKAGES = [
-    #'tensorflow==1.8'
+    #'tensorflow==1.12'
 ]
 
 setup(
     name='chameleon_acr',
-    version='0.5.0',
+    version='1.5.0',
     description='CHAMELEON - ACR module',
     url='https://github.com/gabrielspmoreira/chameleon_recsys',
     # Author details

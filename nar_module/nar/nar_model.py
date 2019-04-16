@@ -5,19 +5,21 @@ from __future__ import print_function
 import tensorflow as tf
 import math
 import numpy as np
-from scipy.sparse import csr_matrix
+import pandas as pd
+from scipy.sparse import csr_matrix, lil_matrix
 from itertools import permutations
 from collections import Counter
 from copy import deepcopy
+from time import time
 
 from tensorflow.contrib.layers import xavier_initializer, variance_scaling_initializer
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 
-from .metrics import HitRate, MRR
-from .utils import merge_two_dicts, get_tf_dtype, hash_str_to_int
-from .evaluation import compute_metrics
+from .metrics import HitRate, HitRateBySessionPosition, MRR, NDCG, ItemCoverage, PopularityBias, CategoryExpectedIntraListDiversity, Novelty, ExpectedRankSensitiveNovelty, ExpectedRankRelevanceSensitiveNovelty, ContentExpectedRankSensitiveIntraListDiversity, ContentExpectedRankRelativeSensitiveIntraListDiversity, ContentExpectedRankRelevanceSensitiveIntraListDiversity, ContentExpectedRankRelativeRelevanceSensitiveIntraListDiversity, ContentAverageIntraListDiversity, ContentMedianIntraListDiversity, ContentMinIntraListDiversity
+from .utils import merge_two_dicts, get_tf_dtype, hash_str_to_int, paired_permutations
+from .evaluation import update_metrics, compute_metrics_results
 
 
 ARTICLE_REQ_FEATURES = ['article_id', 'created_at_ts']
@@ -74,8 +76,15 @@ def cartesian_product(a, b, axis):
     tile_b = tf.tile(tf.expand_dims(b, axis), axis_b_repeat)
     
     cart_prod = tf.concat([tile_a, tile_b], axis=-1)
+
+    #Defining the last dimension of resulting tensor (originally undefined)
+    last_dim = int(a.get_shape()[-1]) + int(b.get_shape()[-1])
+    cart_prod_shape = list(cart_prod.get_shape())
+    cart_prod_shape[-1] = last_dim
+    cart_prod.set_shape(cart_prod_shape)    
     
     return cart_prod
+
 
 
 def shuffle_columns(x):
@@ -91,17 +100,6 @@ def shuffle_columns(x):
 
     return shuffled_columns
 
-def get_tf_dtype(dtype):
-        if dtype == 'int':
-            tf_dtype = tf.int64
-        elif dtype == 'float':
-            tf_dtype = tf.float32
-        #elif dtype == 'string':
-        #    tf_dtype = tf.string
-        else:
-            raise Exception('Invalid dtype "{}"'.format(dtype))
-        return tf_dtype    
-
 class NARModuleModel():
     
     def __init__(self, mode, inputs, labels,  
@@ -111,9 +109,11 @@ class NARModuleModel():
                  lr, keep_prob, negative_samples, negative_sample_from_buffer,
                  content_article_embeddings_matrix,
                  rnn_num_layers=1,            
-                 cosine_loss_gamma=1.0,
+                 softmax_temperature=1.0,
                  reg_weight_decay=0.0, 
-                 recent_clicks_buffer_size = 1000, 
+                 recent_clicks_buffer_hours=1.0,
+                 recent_clicks_buffer_max_size = 1000, 
+                 recent_clicks_for_normalization = 1000,
                  articles_metadata=None,
                  plot_histograms=False,
                  metrics_top_n=5,
@@ -121,7 +121,13 @@ class NARModuleModel():
                  popularity_smooth_log_base=2.0,
                  CAR_embedding_size=256,
                  rnn_units=256,
-                 max_cardinality_for_ohe=30
+                 max_cardinality_for_ohe=10,
+                 novelty_reg_factor=0.0,
+                 diversity_reg_factor=0.0,
+                 internal_features_config={'recency': True,
+                                           'novelty': True,
+                                           'article_content_embeddings': True,
+                                           'item_clicked_embeddings': True}
                 ):        
         
         self.lr = lr 
@@ -131,6 +137,8 @@ class NARModuleModel():
         self.popularity_smooth_log_base = popularity_smooth_log_base
         
         self.is_training = (mode == tf.estimator.ModeKeys.TRAIN)   
+
+        self.internal_features_config = internal_features_config
         
         self.negative_samples = negative_samples 
         self.negative_sample_from_buffer = negative_sample_from_buffer
@@ -149,43 +157,53 @@ class NARModuleModel():
 
         self.max_cardinality_for_ohe = max_cardinality_for_ohe
 
+        self.novelty_reg_factor = tf.constant(novelty_reg_factor, dtype=tf.float32)
+        self.diversity_reg_factor = tf.constant(diversity_reg_factor, dtype=tf.float32)
+
+        self.softmax_temperature = tf.constant(softmax_temperature, dtype=tf.float32, name='softmax_temperature')
+
+        self.recent_clicks_for_normalization = recent_clicks_for_normalization
+        
+
         with tf.variable_scope("article_content_embeddings"):
-            #self.articles_metadata_columns_dict = dict([(column, id) for id, column in enumerate(articles_metadata_columns)])
-            #self.articles_metadata = tf.constant(articles_metadata_values, 
-            #                                     shape=articles_metadata_values.shape, 
-            #                                     dtype=tf.int64)
+
             self.articles_metadata = {}
-            #Converting Article metadata feature vectors to constants in the graph, to avoid many copies
-            for feature_name in articles_metadata:
-                self.articles_metadata[feature_name] = tf.constant(articles_metadata[feature_name], 
-                                                 shape=articles_metadata[feature_name].shape, 
-                                                 dtype=get_tf_dtype(articles_features_config[feature_name]['dtype']))
+            with tf.device('/cpu:0'):
+                #Converting Article metadata feature vectors to constants in the graph, to avoid many copies (is saved with the graph)
+                for feature_name in articles_metadata:
+                    '''
+                    self.articles_metadata[feature_name] = tf.constant(articles_metadata[feature_name], 
+                                                    shape=articles_metadata[feature_name].shape, 
+                                                    dtype=get_tf_dtype(articles_features_config[feature_name]['dtype']))
+                    '''
+                    self.articles_metadata[feature_name] = tf.placeholder(name="articles_metadata",
+                                                    shape=articles_metadata[feature_name].shape, 
+                                                    dtype=get_tf_dtype(articles_features_config[feature_name]['dtype']))
 
 
             self.items_vocab_size = articles_features_config['article_id']['cardinality']
-            #self.publishers_vocab_size = articles_features_config['sequence_features']['publisher_id']['cardinality']
-            #self.categories_vocab_size = articles_features_config['sequence_features']['category_id']['cardinality']
 
-        
-            self.content_article_embeddings_matrix = \
-                tf.constant(content_article_embeddings_matrix, 
-                            shape=content_article_embeddings_matrix.shape,
-                            dtype=tf.float32)
+            #To run on local machine (GPU card with 4 GB RAM), keep Content Article Embeddings constant in CPU memory
+            with tf.device('/cpu:0'):
+
+                #Expects vectors within the range [-0.1, 0.1] (min-max scaled) for compatibility with other input features
+                self.content_article_embeddings_matrix = tf.placeholder(name="content_article_embeddings_matrix",
+                                                               shape=content_article_embeddings_matrix.shape,
+                                                               dtype=tf.float32)
         
         with tf.variable_scope("articles_status"):
-            self.articles_pop = tf.placeholder(name="articles_pop",
-                                               shape=[self.items_vocab_size],
-                                               dtype=tf.int64)
-            tf.summary.scalar('total_items_clicked', family='stats', tensor=tf.count_nonzero(self.articles_pop))
+            with tf.device('/cpu:0'):
+                self.articles_recent_pop_norm = tf.placeholder(name="articles_recent_pop_norm",
+                                                                shape=[self.items_vocab_size],
+                                                                dtype=tf.float32)
+
             
-            self.articles_pop_recently_clicked = tf.placeholder(name="articles_pop_recently_clicked",
-                                                               shape=[self.items_vocab_size],
-                                                               dtype=tf.int64)
-            tf.summary.scalar('total_items_clicked_recently', family='stats', tensor=tf.count_nonzero(self.articles_pop_recently_clicked))
-            
-            self.pop_recent_items_buffer = tf.placeholder(name="pop_recent_items",
-                                               shape=[recent_clicks_buffer_size],
+            self.pop_recent_items_buffer = tf.placeholder(name="pop_recent_items_buffer",
+                                               shape=[recent_clicks_buffer_max_size],
                                                dtype=tf.int64)
+            tf.summary.scalar('unique_items_clicked_recently', family='stats', tensor=tf.shape(tf.unique(self.pop_recent_items_buffer)[0])[0])   
+
+            tf.summary.scalar('unique_items_clicked_recently_for_normalization', family='stats', tensor=tf.shape(tf.unique(self.pop_recent_items_buffer[:self.recent_clicks_for_normalization])[0])[0])   
        
 
         #PS: variance_scaling_initializer() is recommended for RELU activations in https://arxiv.org/abs/1502.01852
@@ -194,7 +212,7 @@ class NARModuleModel():
             
 
             #Initializes CAR item embeddings variable
-            self.create_item_embed_lookup_variable()
+            #self.create_item_embed_lookup_variable()
             
             
             with tf.variable_scope("inputs"):
@@ -214,6 +232,7 @@ class NARModuleModel():
                 self.item_clicked_mask = tf.sequence_mask(seq_lengths)
                 
                 event_timestamp = tf.expand_dims(inputs["event_timestamp"], -1)
+                self.event_timestamp = event_timestamp
                 max_event_timestamp = tf.reduce_max(event_timestamp)
 
             
@@ -253,60 +272,83 @@ class NARModuleModel():
                 batch_negative_items = self.get_batch_negative_samples(all_clicked_items, 
                                                                        additional_samples=negative_sample_recently_clicked_ids, 
                                                                        num_negative_samples=self.negative_samples)
+                #Ignoring last elements from second dimension, as they refer to the last labels concatenated with all_clicked_items just to ignore them in negative samples
+                batch_negative_items = batch_negative_items[:,:-1,:]                                                                       
                 self.batch_negative_items = batch_negative_items
-            
-            
+
             
             #WARNING: Must keep these variables under the same variable scope, to avoid leaking the positive item to the network (probably due to normalization)
             with tf.variable_scope("user_items_contextual_features"):
-                user_context_features_concat = self.get_context_features(inputs, 
+                user_context_features = self.get_features(inputs, 
                             features_config=self.session_features_config['sequence_features'],
                             features_to_ignore=SESSION_REQ_SEQ_FEATURES)
-                            
-                user_context_features = tf.contrib.layers.layer_norm(user_context_features_concat, center=True, scale=True, begin_norm_axis=2)
-                if self.plot_histograms:
-                    tf.summary.histogram("user_context_features", user_context_features)
-            
 
-                input_items_features = self.get_item_features(item_clicked, event_timestamp, 'clicked')            
-                input_user_items_features = tf.concat([user_context_features] + [input_items_features], axis=2)                
+                #If there is no user contextual features, creates a dummy variable to not break following concats
+                if user_context_features != None:
+                    if self.plot_histograms:
+                        tf.summary.histogram("user_context_features", user_context_features)
+                else:
+                    #Dummy tensor with zeroed values
+                    user_context_features = tf.zeros_like(tf.expand_dims(item_clicked, -1), dtype=tf.float32)
+
+                
+                input_items_features = self.get_item_features(item_clicked, event_timestamp, 'clicked')                                            
                 if self.plot_histograms:
                     tf.summary.histogram("input_items_features", input_items_features)
 
+                input_user_items_features_concat = tf.concat([user_context_features, input_items_features], axis=2)
+                input_user_items_features = self.scale_center_features(input_user_items_features_concat)
+                
+                if self.plot_histograms:
+                    tf.summary.histogram("input_user_items_features", input_user_items_features)
+
+                input_user_items_features = tf.layers.dropout(input_user_items_features, 
+                                                              rate=1.0-self.keep_prob,
+                                                              training=self.is_training)
+                
 
                 positive_items_features = self.get_item_features(next_item_label, max_event_timestamp, 'positive')
                 if self.plot_histograms:
                     tf.summary.histogram("positive_items_features", positive_items_features)
-                positive_user_items_features = tf.concat([user_context_features, positive_items_features], axis=2)
+                positive_user_items_features_concat = tf.concat([user_context_features, positive_items_features], axis=2)
+                positive_user_items_features = self.scale_center_features(positive_user_items_features_concat)
 
+                if self.plot_histograms:
+                    tf.summary.histogram("positive_user_items_features", input_user_items_features)
+
+                positive_user_items_features = tf.layers.dropout(positive_user_items_features, 
+                                                              rate=1.0-self.keep_prob,
+                                                              training=self.is_training)
 
                 negative_items_features = self.get_item_features(batch_negative_items, max_event_timestamp, 'negative')
                 if self.plot_histograms:
-                    tf.summary.histogram("negative_items_features", negative_items_features)
+                    tf.summary.histogram("negative_items_features", negative_items_features)          
+                
+                user_context_features_tiled = tf.tile(tf.expand_dims(user_context_features, 2), (1,1,tf.shape(negative_items_features)[2],1))
+                negative_user_items_features_concat  = tf.concat([user_context_features_tiled, negative_items_features], axis=3)
 
-            #TODO: Test again batch normalization instead of layer norm (applying activation function after the normalization - dense(activation=none) + batch_norm(activation=X))
-            
+
+                negative_user_items_features = self.scale_center_features(negative_user_items_features_concat, begin_norm_axis=3)
+                if self.plot_histograms:
+                    tf.summary.histogram("negative_user_items_features", negative_user_items_features)
+
+                negative_user_items_features = tf.layers.dropout(negative_user_items_features, 
+                                                              rate=1.0-self.keep_prob,
+                                                              training=self.is_training)   
+
+
+             
             with tf.variable_scope("CAR"):
-                PreCAR_dense = tf.layers.Dense(512,
-                                            #TODO: Test tf.nn.elu (has non-zero gradient for values < 0 and function is smooth everywhere)
+                PreCAR_dense = tf.layers.Dense(CAR_embedding_size,
                                             activation=tf.nn.leaky_relu, 
-                                            #TODO: Test variance_scaling_initializer(mode="FAN_AVG"), to use the avg of fan_in and fan_out (default is just fan_in)
                                             kernel_initializer=variance_scaling_initializer(),
                                             kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
                                             name="PreCAR_representation"
                                            )  
 
                 input_contextual_item_embedding_pre_CAR = PreCAR_dense(input_user_items_features)
-                #tf.summary.scalar('input_contextual_item_embedding_pre_CAR/fraction_of_zero_values', tf.nn.zero_fraction(input_contextual_item_embedding_pre_CAR))
-
-                #input_contextual_item_embedding_pre_CAR_dropout = tf.layers.dropout(inputs=input_contextual_item_embedding_pre_CAR, 
-                #                           rate=1.0-self.keep_prob, 
-                #                           training=self.is_training)
-
-                CAR_dense_pre_dropout = tf.layers.Dropout(rate=1.0-self.keep_prob)
                 
                 CAR_dense = tf.layers.Dense(CAR_embedding_size,
-                                            #activation=tf.nn.relu, 
                                             activation=tf.nn.tanh, 
                                             kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
                                             name="CAR_representation"
@@ -314,41 +356,31 @@ class NARModuleModel():
             
             with tf.variable_scope("user_personalized_contextual_article_embedding"):
                 with tf.variable_scope("input"):
-                    input_contextual_item_embedding = CAR_dense(CAR_dense_pre_dropout(input_contextual_item_embedding_pre_CAR))
-                    #tf.summary.scalar('input_contextual_item_embedding/fraction_of_zero_values', tf.nn.zero_fraction(input_contextual_item_embedding))
-          
+                    input_contextual_item_embedding = CAR_dense(input_contextual_item_embedding_pre_CAR)
+                    
                     if self.plot_histograms:
                         tf.summary.histogram("input_contextual_item_embedding", input_contextual_item_embedding)
                     
                 with tf.variable_scope("positive"): 
-                    positive_contextual_item_embedding = tf.nn.l2_normalize(CAR_dense(CAR_dense_pre_dropout(PreCAR_dense(positive_user_items_features))), axis=-1)
+                    positive_contextual_item_embedding = CAR_dense(PreCAR_dense(positive_user_items_features))
                     if self.plot_histograms:
                         tf.summary.histogram("positive_contextual_item_embedding", positive_contextual_item_embedding)
 
-                with tf.variable_scope("negative"): 
-                    negative_contextual_input_features =  cartesian_product(user_context_features, 
-                                                                                 negative_items_features, 
-                                                                                 axis=1)                            
-                    #Apply l2-norm to be able to compute cosine similarity by matrix multiplication
-                    negative_contextual_item_embedding = tf.nn.l2_normalize(CAR_dense(CAR_dense_pre_dropout(PreCAR_dense(negative_contextual_input_features))), axis=-1)               
+                with tf.variable_scope("negative"):                                             
+                    negative_contextual_item_embedding = CAR_dense(PreCAR_dense(negative_user_items_features))              
                     if self.plot_histograms:
                         tf.summary.histogram("negative_contextual_item_embedding", negative_contextual_item_embedding)                            
 
             #Building RNN
             rnn_outputs = self.build_rnn(input_contextual_item_embedding, seq_lengths, rnn_units=rnn_units)
 
-            #tf.summary.scalar('rnn_outputs/fraction_of_zero_values', tf.nn.zero_fraction(input_contextual_item_embedding_pre_CAR))
-  
             with tf.variable_scope("session_representation"): 
                 rnn_outputs_fc1 = tf.layers.dense(rnn_outputs, 512,                                        
-                                            #TODO: Test tf.nn.elu (has non-zero gradient for values < 0 and function is smooth everywhere)
                                             activation=tf.nn.leaky_relu, 
                                             kernel_initializer=variance_scaling_initializer(),
                                             kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
                                             name="FC1"
                                            )
-
-                #tf.summary.scalar('rnn_outputs_fc1/fraction_of_zero_values', tf.nn.zero_fraction(rnn_outputs_fc1))
 
                 rnn_outputs_fc1_dropout = tf.layers.dropout(inputs=rnn_outputs_fc1, 
                                            rate=1.0-self.keep_prob, 
@@ -356,7 +388,6 @@ class NARModuleModel():
                 
                 
                 rnn_outputs_fc2 = tf.layers.dense(rnn_outputs_fc1_dropout, CAR_embedding_size,
-                    #activation=tf.nn.relu, 
                     activation=tf.nn.tanh, 
                     name='FC2', 
                     kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay))
@@ -370,75 +401,158 @@ class NARModuleModel():
             with tf.variable_scope("predicted_contextual_item_embedding"): 
                 #Continuing with DSSM losss
                 #Apply l2-norm to be able to compute cosine similarity by matrix multiplication
-                predicted_contextual_item_embedding = tf.nn.l2_normalize(rnn_outputs_fc2, axis=-1)
+                #predicted_contextual_item_embedding = tf.nn.l2_normalize(rnn_outputs_fc2, axis=-1)
+                predicted_contextual_item_embedding = rnn_outputs_fc2
                 
                 if self.plot_histograms:
                     tf.summary.histogram("predicted_contextual_item_embedding", predicted_contextual_item_embedding)
 
+
             with tf.variable_scope("recommendations_ranking"): 
+
+                
+                matching_dense_layer_1 = tf.layers.Dense(128,
+                                            activation=tf.nn.leaky_relu, 
+                                            kernel_initializer=variance_scaling_initializer(),
+                                            kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
+                                            name="matching_dense_layer_1"
+                                       )
+
+                matching_dense_layer_2 = tf.layers.Dense(64,
+                                            activation=tf.nn.leaky_relu, 
+                                            kernel_initializer=variance_scaling_initializer(),
+                                            kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
+                                            name="matching_dense_layer_2"
+                                       )
+
+                matching_dense_layer_3 = tf.layers.Dense(32,
+                                            activation=tf.nn.leaky_relu, 
+                                            kernel_initializer=variance_scaling_initializer(), 
+                                            kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
+                                            name="matching_dense_layer_3"
+                                       )
+
+                matching_dense_layer_4 = tf.layers.Dense(1,
+                                            activation=None, 
+                                            kernel_initializer=tf.initializers.lecun_uniform(),
+                                            kernel_regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay),
+                                            name="matching_dense_layer_4"
+                                       )
+
+
                 with tf.variable_scope("cos_sim_positive"):
-                    #Computing Cosine similarity between predicted embedding and positive embedding (label)
-                    cos_sim_positive = tf.reduce_sum(tf.multiply(positive_contextual_item_embedding, 
-                                                                 predicted_contextual_item_embedding), 
-                                                     axis=-1, keepdims=True)
-                    #print("cos_sim_positive", cos_sim_positive.shape)
+
+                    positive_multiplied_embeddings = tf.multiply(positive_contextual_item_embedding, 
+                                                                 predicted_contextual_item_embedding)
+
                     if self.plot_histograms:
-                        tf.summary.histogram("train/cos_sim_positive", cos_sim_positive)
+                        tf.summary.histogram("train/positive_multiplied_embeddings", positive_multiplied_embeddings)
+
+
+                    cos_sim_positive = matching_dense_layer_4(matching_dense_layer_3(matching_dense_layer_2(matching_dense_layer_1(positive_multiplied_embeddings))))
                     
+                    if self.plot_histograms:
+                        tf.summary.histogram("train/cos_sim_positive", 
+                                values=tf.boolean_mask(cos_sim_positive, tf.cast(tf.sign(next_item_label), tf.bool)))
+                   
                     
                 with tf.variable_scope("cos_sim_negative"):
-                    #Computing Cosine similarity between predicted embedding and negative items embedding
-                    cos_sim_negative = tf.reduce_sum(tf.multiply(negative_contextual_item_embedding, 
-                                                     tf.expand_dims(predicted_contextual_item_embedding, 2)), axis=-1)
-                    #print("cos_sim_negative", cos_sim_negative.shape)
+                    negative_multiplied_embeddings = tf.multiply(negative_contextual_item_embedding, 
+                                                                 tf.expand_dims(predicted_contextual_item_embedding, 2))
+                    
                     if self.plot_histograms:
-                        tf.summary.histogram("train/cos_sim_negative", cos_sim_negative)
+                        tf.summary.histogram("train/negative_multiplied_embeddings", negative_multiplied_embeddings)
+
+                    cos_sim_negative = matching_dense_layer_4(matching_dense_layer_3(matching_dense_layer_2(matching_dense_layer_1(negative_multiplied_embeddings))))
+                    cos_sim_negative = tf.squeeze(cos_sim_negative,  axis=-1)
+                    
+                    if self.plot_histograms:
+                        tf.summary.histogram("train/cos_sim_negative", 
+                                values=tf.boolean_mask(cos_sim_negative, tf.cast(tf.sign(next_item_label), tf.bool)))
+
      
                 
-                with tf.variable_scope("positive_prob"):
-                    gamma_var = tf.get_variable('gamma', dtype=tf.float32, trainable=True, 
-                                                initializer=tf.constant(cosine_loss_gamma))
-                    tf.summary.scalar('gamma', family='train', tensor=gamma_var)
+                with tf.variable_scope("softmax_function"):                    
 
                     #Concatenating cosine similarities (positive + K sampled negative)
-                    cos_sim_concat = tf.concat([cos_sim_positive, cos_sim_negative], axis=2)
-                    cos_sim_concat_scaled = cos_sim_concat * gamma_var
+                    cos_sim_concat = tf.concat([cos_sim_positive, cos_sim_negative], axis=2)                    
+                    
                     #Computing softmax over cosine similarities
+                    cos_sim_concat_scaled = cos_sim_concat / self.softmax_temperature
                     items_prob = tf.nn.softmax(cos_sim_concat_scaled) 
-                
-                
+
+                    neg_items_prob = tf.nn.softmax(cos_sim_negative / self.softmax_temperature)
+
                 if mode == tf.estimator.ModeKeys.EVAL:
                     #Computing evaluation metrics
                     self.define_eval_metrics(next_item_label, batch_negative_items, items_prob)
 
+                
+                
+                #if mode == tf.estimator.ModeKeys.TRAIN:
+                with tf.variable_scope("samples_popularity"):
+                    positive_articles_norm_pop = self.get_items_norm_popularity_feature(next_item_label, summary_suffix='positive')
 
-                with tf.variable_scope("loss"):
-                    #Computing the probability of the positive item (label)
-                    positive_prob = items_prob[:,:,0]
-                    negative_probs = items_prob[:,:,1:]
-                    #Summary of first element of the batch sequence (because others might be masked)
+                    negative_articles_articles_norm_pop = self.get_items_norm_popularity_feature(batch_negative_items, summary_suffix='negative')                    
+                    negative_articles_articles_norm_pop_squeezed = tf.squeeze(negative_articles_articles_norm_pop, axis=-1)                                      
+                    negative_articles_articles_norm_pop_tiled = negative_articles_articles_norm_pop_squeezed
+
+                    candidate_samples_norm_pop = tf.concat([positive_articles_norm_pop, negative_articles_articles_norm_pop_tiled], axis=2)
                     if self.plot_histograms:
-                        tf.summary.histogram("positive_prob", positive_prob[:,0])
-                        tf.summary.histogram("negative_probs", negative_probs[:,0,:])
+                        tf.summary.histogram("candidate_samples_norm_pop", values=tf.boolean_mask(candidate_samples_norm_pop, tf.cast(tf.sign(next_item_label), tf.bool)))
+
+                    negative_samples_norm_pop_scaled =  self.get_items_pop_novelty_feature(negative_articles_articles_norm_pop_tiled)
+
+                    if self.plot_histograms:
+                        tf.summary.histogram("negative_samples_norm_pop_scaled", values=tf.boolean_mask(negative_samples_norm_pop_scaled, tf.cast(tf.sign(next_item_label), tf.bool)))
+
+            with tf.variable_scope("loss"):
+                #Computing batch loss
+                loss_mask = tf.to_float(self.item_clicked_mask)
+
+                #Computing the probability of the positive item (label)
+                positive_prob = items_prob[:,:,0]
+                negative_probs = items_prob[:,:,1:]
+
+                
+                #Summary of first element of the batch sequence (because others might be masked)
+                if self.plot_histograms:
+                    tf.summary.histogram("positive_prob", positive_prob[:,0])
+                    tf.summary.histogram("negative_probs", negative_probs[:,0,:])
 
 
-                    #Computing batch loss
-                    loss_mask = tf.to_float(self.item_clicked_mask)
-                    masked_loss = tf.multiply(tf.log(positive_prob), loss_mask)
-                     
-                    #Averaging the loss by the number of masked items in the batch
-                    cosine_sim_loss = -tf.reduce_sum(masked_loss) / tf.reduce_sum(loss_mask) 
-                    tf.summary.scalar("train/cosine_sim_loss", family='train', tensor=cosine_sim_loss)
-                    
-                    #reg_loss = self.reg_weight_decay * sum(tf.nn.l2_loss(tf_var) for tf_var in tf.trainable_variables() if not ("noreg" in tf_var.name or "Bias" in tf_var.name))
-                    reg_loss = tf.losses.get_regularization_loss()
-                    tf.summary.scalar("train/reg_loss", family='train', tensor=reg_loss)
-                    
-                    self.total_loss = cosine_sim_loss  + reg_loss
-                    tf.summary.scalar("train/total_loss", family='train', tensor=self.total_loss)
+                #reg_loss = self.reg_weight_decay * sum(tf.nn.l2_loss(tf_var) for tf_var in tf.trainable_variables() if not ("noreg" in tf_var.name or "Bias" in tf_var.name))
+                reg_loss = tf.losses.get_regularization_loss()
+                tf.summary.scalar("reg_loss", family='train', tensor=reg_loss)
+   
+                
+                #XE loss
+                xe_loss = tf.multiply(tf.log(positive_prob), loss_mask)
 
-            
-           
+                
+                #Averaging the loss by the number of masked items in the batch
+                cosine_sim_loss = -tf.reduce_sum(xe_loss) / tf.reduce_sum(loss_mask) 
+                tf.summary.scalar("cosine_sim_loss", family='train', tensor=cosine_sim_loss)
+
+                self.total_loss = cosine_sim_loss + reg_loss
+
+                #if mode == tf.estimator.ModeKeys.TRAIN:
+                items_prob_masked = tf.multiply(items_prob, tf.expand_dims(loss_mask, -1), name='items_prob_masked_op')
+
+
+                if novelty_reg_factor > 0.0:
+                    with tf.variable_scope("novelty_loss"):                   
+                        masked_nov_reg     = self.novelty_reg_factor * tf.reduce_sum(tf.multiply(tf.multiply(neg_items_prob, negative_samples_norm_pop_scaled), tf.expand_dims(loss_mask, -1)), axis=-1)
+                        
+                        if self.plot_histograms:
+                            tf.summary.histogram("masked_nov_reg", values=tf.boolean_mask(masked_nov_reg, tf.cast(tf.sign(next_item_label), tf.bool))) 
+                        
+                        nov_reg_loss = tf.reduce_sum(masked_nov_reg) / tf.reduce_sum(loss_mask) 
+                                      
+                        tf.summary.scalar("nov_reg_loss", family='train', tensor=nov_reg_loss) 
+                        self.total_loss = self.total_loss - nov_reg_loss
+
+                tf.summary.scalar("total_loss", family='train', tensor=self.total_loss)
                      
             if mode == tf.estimator.ModeKeys.TRAIN:
                 with tf.variable_scope('training'):
@@ -451,8 +565,6 @@ class NARModuleModel():
                     #Necessary to run update ops for batch_norm, streaming metrics
                     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)                
                     with tf.control_dependencies(update_ops):      
-
-                        #self.train = opt.minimize(self.total_loss, global_step=self.gs)
                         # Get the gradient pairs (Tensor, Variable)
                         grads = opt.compute_gradients(self.total_loss)
                         # Update the weights wrt to the gradient
@@ -460,25 +572,19 @@ class NARModuleModel():
                                                          global_step=tf.train.get_global_step()#self.gs
                                                         )
 
-
                         if self.plot_histograms:
-                            # Save the grads with tf.summary.histogram (only for debug - SLOW!)
-                            for index, grad in enumerate(grads):
-                                try:
-                                    tf.summary.histogram("{}-grad".format(grads[index][1].name), grads[index])
-                                except Exception as e:
-                                    print("ERROR generating histogram for %d - %s: %s" % (index, grads[index][1].name, e))
-            
+                            # Add histograms for trainable variables.
+                            for grad, var in grads:
+                                if grad is not None:
+                                    tf.summary.histogram(var.op.name + '/gradients', grad)
 
-    def get_context_features(self, inputs, features_config, 
+    def get_features(self, inputs, features_config, 
                              features_to_ignore):
 
         def cat_ohe(feature_name, size, inputs):
             return tf.one_hot(inputs[feature_name], size, name="{}_cat_one_hot".format(feature_name))
                 
         def cat_embed(feature_name, size, inputs):
-            #print("GET_CONTEXT_FEATURES(): {}_cat_embedding".format(feature_name))
-
             with tf.variable_scope("{}_cat_embedding".format(feature_name), reuse=tf.AUTO_REUSE):        
                 dim =  get_embedding_size(size)
                 embeddings = tf.get_variable("{}_embedding".format(feature_name), shape=[size, dim],
@@ -486,8 +592,8 @@ class NARModuleModel():
                 lookup = tf.nn.embedding_lookup(embeddings, ids=inputs[feature_name])#, max_norm=1)
                 return lookup
 
-        with tf.variable_scope("context_features"):
-            context_features_list = []
+        with tf.variable_scope("features"):
+            features_list = []
             for feature_name in features_config:
                 #Ignores item_clicked and timestamp as user contextual features
                 if feature_name in features_to_ignore:
@@ -495,7 +601,7 @@ class NARModuleModel():
 
                 if features_config[feature_name]['type'] == 'categorical':
                     size = features_config[feature_name]['cardinality']
-                    if features_config[feature_name]['cardinality'] < self.max_cardinality_for_ohe:
+                    if features_config[feature_name]['cardinality'] <= self.max_cardinality_for_ohe:
                         feature_op = cat_ohe(feature_name, size, inputs)
                     else:
                         feature_op = cat_embed(feature_name, size, inputs)
@@ -503,10 +609,19 @@ class NARModuleModel():
                     feature_op = tf.expand_dims(inputs[feature_name], -1)
                 else:
                     raise Exception('Invalid feature type: {}'.format(feature_name))
-                context_features_list.append(feature_op)
 
-            context_features_concat = tf.concat(context_features_list, axis=2)
-            return context_features_concat
+
+                if self.plot_histograms:
+                    tf.summary.histogram(feature_name, family='stats',
+                                    values=feature_op)
+
+                features_list.append(feature_op)
+
+            if len(features_list) > 0:
+                features_concat = tf.concat(features_list, axis=-1)
+                return features_concat
+            else:
+                return None
 
 
 
@@ -518,16 +633,14 @@ class NARModuleModel():
             with tf.variable_scope("predicted_items"):
 
                 next_item_label_expanded = tf.expand_dims(next_item_label, -1)
-                batch_negative_items_tiled = tf.tile(tf.expand_dims(batch_negative_items, 1), [1, tf.shape(next_item_label_expanded)[1], 1])
-
-                pos_neg_items_concat = tf.concat([next_item_label_expanded, batch_negative_items_tiled], 2)
+                
+                pos_neg_items_concat = tf.concat([next_item_label_expanded, batch_negative_items], 2)
 
                 #Predicting item ids from [positive + k negative samples]
-                items_top_prob_indexes = tf.nn.top_k(items_prob,  k=tf.shape(items_prob)[2]).indices
+                items_top_prob = tf.nn.top_k(items_prob,  k=tf.shape(items_prob)[2])
+                items_top_prob_indexes = items_top_prob.indices
+                self.items_top_prob_values = items_top_prob.values
 
-                #In older versions of TF
-                #items_top_prob_indexes_idx = array_ops.where(
-                #        math_ops.not_equal(items_top_prob_indexes, tf.constant(-1, tf.int32)))
                 items_top_prob_indexes_idx = tf.contrib.layers.dense_to_sparse(items_top_prob_indexes, eos_token=-1).indices
                 
                 items_top_prob_indexes_val = tf.gather_nd(items_top_prob_indexes, items_top_prob_indexes_idx)
@@ -537,13 +650,6 @@ class NARModuleModel():
                 predicted_item_ids = tf.reshape(tf.gather_nd(pos_neg_items_concat, items_top_prob_reordered_indexes), 
                                                 tf.shape(pos_neg_items_concat))
                 self.predicted_item_ids = predicted_item_ids
-
-            #Computing Accuracy@1
-            self.next_item_accuracy_at_1, self.next_item_accuracy_at_1_update_op = \
-                                tf.metrics.accuracy(predictions=predicted_item_ids[:,:,0], 
-                                                    labels=next_item_label, 
-                                                    weights=tf.to_float(self.item_clicked_mask),
-                                                    name='accuracy_at_1')
 
 
 
@@ -558,10 +664,10 @@ class NARModuleModel():
             #Computing MRR@N
             self.mrr, self.mrr_update_op = self.define_mrr_metric(predicted_item_ids, next_item_label_expanded, 
                                                                   topk=self.metrics_top_n)
-
+            
             #Computing NDCG@N
-            self.ndcg_at_n_mean, self.ndcg_at_n_mean_update_op = \
-                self.define_ndcg_metric(predicted_item_ids, next_item_label_expanded, topk=self.metrics_top_n)
+            #self.ndcg_at_n_mean, self.ndcg_at_n_mean_update_op = \
+            #    self.define_ndcg_metric(predicted_item_ids, next_item_label_expanded, topk=self.metrics_top_n)
 
 
     def define_ndcg_metric(self, predicted_item_ids, next_item_label_expanded, topk):
@@ -571,7 +677,6 @@ class NARModuleModel():
             ndcg_predicted = tf_ndcg_at_k(predicted_correct, topk)
             
             #Combining masks of padding items and NDCG zeroed values (because the correct value is not in the top n)
-            #ndcg_mask = tf.multiply(tf.to_float(self.item_clicked_mask), tf.to_float(tf.sign(ndcg_predicted)))
             ndcg_mask = tf.to_float(self.item_clicked_mask)
             
             ndcg_mean, ndcg_mean_update_op = tf.metrics.mean(
@@ -610,12 +715,29 @@ class NARModuleModel():
 
             return mrr, mrr_update_op
 
-            
-    def get_layer_norm_item_features(self, item_features):
-        with tf.variable_scope("layer_norm_item_features", reuse=tf.AUTO_REUSE):
-            item_features_scaled = tf.contrib.layers.layer_norm(item_features, center=True, scale=True, begin_norm_axis=2)
-            
-            return item_features_scaled
+    def scale_center_features(self, item_features, begin_norm_axis=2):
+
+
+        with tf.variable_scope("input_features_center_scale", reuse=tf.AUTO_REUSE):
+            gamma = tf.get_variable("gamma_scale", 
+                            shape=[item_features.get_shape()[-1]], 
+                            initializer=tf.ones_initializer(),
+                            regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay))
+            beta = tf.get_variable("beta_center", 
+                            shape=[item_features.get_shape()[-1]], 
+                            initializer=tf.zeros_initializer(),
+                            regularizer=tf.contrib.layers.l2_regularizer(self.reg_weight_decay))
+
+            if self.plot_histograms:
+                tf.summary.histogram('input_features_gamma_scale', family='stats', values=gamma)
+                tf.summary.histogram('input_features_beta_center', family='stats', values=beta)
+
+
+            item_features_centered_scaled = (item_features * gamma) + beta
+
+        return item_features_centered_scaled
+
+
         
     def items_cat_embed(self, item_ids):
         #with tf.device('/cpu:0'):
@@ -629,72 +751,112 @@ class NARModuleModel():
     
     def get_item_features(self, item_ids, events_timestamp, summary_suffix):
         with tf.variable_scope("item_features"):
-            #items_ohe = tf.one_hot(item_ids, self.items_vocab_size)
-
-            item_clicked_interactions_embedding = self.items_cat_embed(item_ids)
-
-
-            items_acr_embeddings_lookup = tf.nn.embedding_lookup(self.content_embedding_variable, ids=item_ids)
-
             
             #Obtaining item features for specified items (e.g. clicked, negative samples)
-            item_contextual_features = {}
+            item_metadata_features_values = {}
             for feature_name in self.articles_features_config:
                 if feature_name not in ARTICLE_REQ_FEATURES:
-                    item_contextual_features[feature_name] = \
+                    item_metadata_features_values[feature_name] = \
                             tf.gather(self.articles_metadata[feature_name], item_ids)
 
-            #Concatenating item contextual features
-            item_contextual_features = self.get_context_features(item_contextual_features, 
-                            features_config=self.articles_features_config, 
-                            features_to_ignore=ARTICLE_REQ_FEATURES)
+            items_features_list = []
+
+            if len(item_metadata_features_values) > 0:
+                #Concatenating item contextual features
+                item_metadata_features = self.get_features(item_metadata_features_values, 
+                                features_config=self.articles_features_config, 
+                                features_to_ignore=ARTICLE_REQ_FEATURES)
+                #Adding articles metadata attributes as input for the network
+                items_features_list.append(item_metadata_features)
+
+                if self.plot_histograms:
+                    tf.summary.histogram('item_metadata_features/'+summary_suffix, family='stats',
+                                        values=tf.boolean_mask(item_metadata_features, tf.cast(tf.sign(item_ids), tf.bool)))
 
 
-            #Taking the maximum timestamp of the batch
-            #max_event_timestamp = tf.reduce_max(event_timestamp)
+            #If enabled, add Article Content Embeddings trained by ACR module
+            if self.internal_features_config['article_content_embeddings']:
+                items_acr_embeddings_lookup = tf.nn.embedding_lookup(self.content_article_embeddings_matrix, ids=item_ids)
+
+                items_features_list.append(items_acr_embeddings_lookup)
+
+                if self.plot_histograms:
+                    tf.summary.histogram('items_acr_embeddings_lookup/'+summary_suffix, family='stats',
+                                    values=tf.boolean_mask(items_acr_embeddings_lookup, tf.cast(tf.sign(item_ids), tf.bool)))                 
+                
+
+            #If enabled, adds trainable item embeddings
+            if self.internal_features_config['item_clicked_embeddings']:
+                item_clicked_interactions_embedding = self.items_cat_embed(item_ids)
+                items_features_list.append(item_clicked_interactions_embedding)
+
+                if self.plot_histograms:
+                    tf.summary.histogram('item_clicked_interactions_embedding/'+summary_suffix, family='stats',
+                                    values=tf.boolean_mask(item_clicked_interactions_embedding, tf.cast(tf.sign(item_ids), tf.bool)))
+
             #Computing Item Dynamic features (RECENCY and POPULARITY)
-            items_dynamic_features = self.get_items_dynamic_features(item_ids, 
+            items_context_features = self.get_items_dynamic_features(item_ids, 
                                                         events_timestamp, 
                                                         summary_suffix=summary_suffix)
+            
+            #If both Recency and Novelty feature were disabled, ignore them
+            if items_context_features is not None:
+                items_features_list.append(items_context_features)
 
-            #Creating a feature specifically to inform the network whether this is a padding item or not
-            #item_clicked_not_padding = tf.expand_dims(tf.cast(tf.sign(item_ids), tf.float32), axis=-1)
+            items_features_concat = tf.concat(items_features_list, axis=-1)
+            
+            return items_features_concat
 
-            items_features_list = [ 
-                                    #Item embedding trained by ACR module
-                                    items_acr_embeddings_lookup, 
-                                    #Trainable item embedding
-                                    item_clicked_interactions_embedding,
-                                    item_contextual_features,
-                                    items_dynamic_features, 
-                                    #item_clicked_not_padding
-                                    ]
+    def min_max_normalization(self, tensor, tensor_to_get_stats_from, min_max_range=(-1.0,1.0), epsilon=1e-24, summary_suffix=''):
+        epsilon = tf.constant(epsilon, dtype=tf.float32, name="epsilon_min_max")
+        min_scale = tf.constant(min_max_range[0], dtype=tf.float32, name="scale_min_value")
+        max_scale = tf.constant(min_max_range[1], dtype=tf.float32, name="scale_max_value")
 
+        min_value = tf.reduce_min(tensor_to_get_stats_from)
+        max_value = tf.reduce_max(tensor_to_get_stats_from)
 
-            items_features_concat = tf.concat(items_features_list, axis=2)
+        tf.summary.scalar('min_max_normalization/'+summary_suffix+'/min', family='stats', tensor=min_value)
+        tf.summary.scalar('min_max_normalization/'+summary_suffix+'/max', family='stats', tensor=max_value)
 
-
-            #tf.summary.histogram("items_features_norm_BEFORE", tf.boolean_mask(input_items_features_concat, self.item_clicked_mask))
-            items_features_norm = self.get_layer_norm_item_features(items_features_concat)
-            #tf.summary.histogram("items_features_norm_AFTER", tf.boolean_mask(input_items_features, self.item_clicked_mask))
-
-            return items_features_norm
+        scaled = (tensor - min_value + epsilon) / tf.maximum((max_value - min_value), 2*epsilon)
+        centered = scaled * (max_scale - min_scale) + min_scale
+        return centered
        
-    def normalize_values(self, tensor_to_normalize, tensor_to_get_stats_from): 
+    def normalize_values(self, tensor_to_normalize, tensor_to_get_stats_from, summary_suffix='', 
+                         min_max_scaling_after_znorm=True, min_max_range=(-1.0,1.0)): 
         with tf.variable_scope("values_normalization"):       
             mean, variance  = tf.nn.moments(tensor_to_get_stats_from, axes=[0])        
+
+            #tf.logging.info('normalize_values/{}/mean={}'.format(summary_suffix, mean.get_shape()))
+            #tf.logging.info('normalize_values/{}/variance={}'.format(summary_suffix, variance.get_shape()))
             
             #Fixing size of stats to avoid dynamic last dimension on tensor_normed
             mean = tf.reshape(mean, [1])
             variance = tf.reshape(variance, [1])
              
-            stddev = tf.sqrt(variance)
-            
             #To avoid division by zero
-            epsilon = tf.constant(1e-8)        
-            tensor_normed = (tensor_to_normalize - mean)  / (stddev + epsilon)
+            epsilon = tf.constant(1e-24)
+            stddev = tf.sqrt(variance + epsilon)
+
+            tf.summary.scalar('normalize_values/'+summary_suffix+'/mean', family='stats', tensor=mean[0])
+            tf.summary.scalar('normalize_values/'+summary_suffix+'/stddev', family='stats', tensor=stddev[0])
+                 
+            #Standardization (z-normalization)
+            tensor_normed = (tensor_to_normalize - mean)  / stddev
+
+            if min_max_scaling_after_znorm:
+                tensor_to_get_stats_from_normed = (tensor_to_get_stats_from - mean)  / stddev
+                tensor_normed = self.min_max_normalization(tensor_normed, tensor_to_get_stats_from_normed, 
+                                                            min_max_range=min_max_range,
+                                                            summary_suffix=summary_suffix)
+
             return tensor_normed    
     
+    def get_last_items_from_recent_clicks_buffer(self, last_n):
+        with tf.variable_scope("last_items_from_recent_clicks_buffer"):   
+            non_zero_recent_items = tf.boolean_mask(self.pop_recent_items_buffer, tf.cast(tf.sign(self.pop_recent_items_buffer), tf.bool))
+            return non_zero_recent_items[:last_n]
+
     def get_unique_items_from_pop_recent_buffer(self):
         with tf.variable_scope("unique_items_from_pop_recent_buffer"):    
             recent_items_unique, _ = tf.unique(self.pop_recent_items_buffer)
@@ -702,38 +864,42 @@ class NARModuleModel():
             recent_items_unique = tf.boolean_mask(recent_items_unique,
                                                   tf.cast(tf.sign(recent_items_unique), tf.bool)) 
             return recent_items_unique
+
     
-    def calculate_items_recency(self, creation_dates, reference_timestamps):
-        with tf.variable_scope("calculate_items_recency"):    
-            elapsed_days = tf.nn.relu(((tf.to_float(reference_timestamps) / tf.constant(1000.0)) \
-                               - tf.to_float(creation_dates)) / tf.constant(60.0 * 60.0 * 24.0))
-            
-            elapsed_days_smoothed = log_1p(elapsed_days, base=self.elapsed_days_smooth_log_base)
-            
-            return elapsed_days_smoothed
+    def calculate_elapsed_days_since_publishing(self, creation_dates, reference_timestamps):
+        with tf.variable_scope("elapsed_days_since_publishing"):
+            #Timestamps and created_at_ts
+            elapsed_days = tf.nn.relu((tf.to_float(reference_timestamps) \
+                                      - tf.to_float(creation_dates)) / tf.constant(1000.0 * 60.0 * 60.0 * 24.0))
+            return elapsed_days
     
-    def normalize_recency_feature(self, batch_elapsed_days_since_publishing, batch_events_timestamp, item_ids):
+    def normalize_recency_feature(self, batch_elapsed_days_since_publishing, batch_events_timestamp, item_ids, 
+                                        summary_suffix=''):
         with tf.variable_scope("normalize_recency_feature"):   
             #Computing global recency stats from buffer
-            recent_items_unique = self.get_unique_items_from_pop_recent_buffer()
-            recent_items_creation_date = tf.gather(self.articles_metadata['created_at_ts'], recent_items_unique)
-            recent_items_elapsed_days_since_creation = self.calculate_items_recency(recent_items_creation_date, 
-                                                                                                      tf.reduce_max(batch_events_timestamp))
+            last_clicked_items = self.get_last_items_from_recent_clicks_buffer(self.recent_clicks_for_normalization)
+            recent_items_creation_date = tf.gather(self.articles_metadata['created_at_ts'], last_clicked_items)
+            recent_items_elapsed_days_since_creation= self.calculate_elapsed_days_since_publishing(recent_items_creation_date, 
+                                                                                    tf.reduce_max(batch_events_timestamp))
             recent_items_elapsed_days_since_creation_smoothed = log_1p(recent_items_elapsed_days_since_creation, 
-                                                                       base=self.elapsed_days_smooth_log_base)
-            
+                                                                       base=self.elapsed_days_smooth_log_base)                                                                           
 
             #Normalizing batch recency feature
             batch_elapsed_days_since_publishing_smoothed = log_1p(batch_elapsed_days_since_publishing, 
                                                                   base=self.elapsed_days_smooth_log_base)
+
+
+            batch_elapsed_days_since_publishing_smoothed_non_zero = tf.reshape(tf.boolean_mask(batch_elapsed_days_since_publishing_smoothed, tf.cast(tf.sign(item_ids), tf.bool)), [-1])
             
-            #If there aren't recent items available in the buffer (first batch), use batch items to compute norm stats
-            tensor_to_get_stats_from = tf.cond(tf.equal(tf.shape(recent_items_elapsed_days_since_creation_smoothed)[0], tf.constant(0)), 
-                                               lambda: tf.boolean_mask(batch_elapsed_days_since_publishing_smoothed, tf.cast(tf.sign(item_ids), tf.bool)),
+            #If there aren't recent items available in the buffer (first batch), use batch items (zeroed matrix) to compute norm stats
+            #After that, do not use batch to compute mean and stddev, to avoid leak
+            tensor_to_get_stats_from = tf.cond(tf.equal(tf.shape(last_clicked_items)[0], tf.constant(0)), 
+                                               lambda: batch_elapsed_days_since_publishing_smoothed_non_zero,
                                                lambda: recent_items_elapsed_days_since_creation_smoothed)
-                                               
+                       
             batch_elapsed_days_since_publishing_normed = self.normalize_values(batch_elapsed_days_since_publishing_smoothed, 
-                                                                               tensor_to_get_stats_from)
+                                                                               tensor_to_get_stats_from,
+                                                                               summary_suffix='log_elapsed_days_since_publishing/'+summary_suffix)
             return batch_elapsed_days_since_publishing_normed
         
     
@@ -742,65 +908,103 @@ class NARModuleModel():
             #Computing RECENCY feature
             batch_articles_creation_date = tf.gather(tf.reshape(self.articles_metadata['created_at_ts'], 
                                                                 [-1,1]), item_ids)
-            elapsed_days_since_publishing = self.calculate_items_recency(batch_articles_creation_date, events_timestamp)
+
+            '''
+            #TO DEBUG
+            elapsed_hours = self.calculate_elapsed_hours_temp(batch_articles_creation_date, events_timestamp)
+            if self.plot_histograms:
+                tf.summary.histogram('batch_elapsed_hours/'+summary_suffix, family='stats',
+                                  values=tf.boolean_mask(elapsed_hours, tf.cast(tf.sign(item_ids), tf.bool)))
+
+                tf.summary.scalar('batch_elapsed_hours_scalar/'+summary_suffix, family='stats',
+                                    tensor=tf.reduce_mean(tf.boolean_mask(elapsed_hours, tf.cast(tf.sign(item_ids), tf.bool))))
+            '''
+                                                            
+            elapsed_days_since_publishing = self.calculate_elapsed_days_since_publishing(batch_articles_creation_date, events_timestamp)
+            
+            tf.summary.scalar('batch_elapsed_days_since_publishing_scalar/'+summary_suffix, family='stats',
+                                    tensor=tf.reduce_mean(tf.boolean_mask(elapsed_days_since_publishing, tf.cast(tf.sign(item_ids), tf.bool))))
+                                    
             if self.plot_histograms:
                 tf.summary.histogram('batch_elapsed_days_since_publishing/'+summary_suffix, family='stats',
                                   values=tf.boolean_mask(elapsed_days_since_publishing, tf.cast(tf.sign(item_ids), tf.bool)))
             
             
             elapsed_days_since_publishing_norm = self.normalize_recency_feature(elapsed_days_since_publishing, 
-                                                                                  events_timestamp, item_ids)
+                                                                                  events_timestamp, item_ids, 
+                                                                                  summary_suffix=summary_suffix)
 
+            tf.summary.scalar('batch_elapsed_days_since_publishing_norm_scalar/'+summary_suffix, family='stats',
+                                    tensor=tf.reduce_mean(tf.boolean_mask(elapsed_days_since_publishing_norm, tf.cast(tf.sign(item_ids), tf.bool))))
+            
             if self.plot_histograms:
                 tf.summary.histogram('batch_elapsed_days_since_publishing_norm/'+summary_suffix, family='stats',
-                                  values=tf.boolean_mask(elapsed_days_since_publishing_norm, tf.cast(tf.sign(item_ids), tf.bool)))
+                                  values=tf.boolean_mask(elapsed_days_since_publishing_norm, tf.cast(tf.sign(item_ids), tf.bool)))                
                     
             
             return elapsed_days_since_publishing_norm, batch_articles_creation_date
-    
-    
-    def normalize_popularity_feature(self, batch_items_pop, item_ids):
-        with tf.variable_scope("popularity_feature_normalization"): 
-            #Computing global recency stats from buffer
-            recent_items_unique = self.get_unique_items_from_pop_recent_buffer()
-            recent_items_pop = tf.gather(self.articles_pop_recently_clicked, recent_items_unique)
-            recent_items_pop_smoothed = log_1p(recent_items_pop, 
-                                               base=self.popularity_smooth_log_base)
-            self.recent_items_pop_smoothed = recent_items_pop_smoothed
-            
-            #Normalizing batch recency feature
-            batch_items_pop_smoothed = log_1p(batch_items_pop, 
-                                              base=self.popularity_smooth_log_base)
-            
-            #If there aren't recent items available in the buffer (first batch), use batch items to compute norm stats
-            tensor_to_get_stats_from = tf.cond(tf.equal(tf.shape(recent_items_pop_smoothed)[0], tf.constant(0)), 
-                                               lambda: tf.boolean_mask(batch_items_pop_smoothed, 
-                                                               tf.cast(tf.sign(item_ids), tf.bool)),
-                                               lambda: recent_items_pop_smoothed)
-            
-            batch_items_pop_normed = self.normalize_values(batch_items_pop_smoothed, 
-                                                        tensor_to_get_stats_from)
-            
-            return batch_items_pop_normed
-    
-    def get_items_popularity_feature(self, item_ids, summary_suffix=''):
+
+
+    def get_items_norm_popularity_feature(self, item_ids, summary_suffix=''):
         #Computing POPULARITY feature
-        with tf.variable_scope("items_popularity_feature"):             
-            
-            #batch_articles_pop = tf.to_float(tf.gather(self.articles_pop, tf.expand_dims(item_ids, -1)))                
-            batch_articles_pop = tf.to_float(tf.gather(self.articles_pop_recently_clicked, tf.expand_dims(item_ids, -1)))               
+        with tf.variable_scope("items_norm_popularity_feature"):         
+
+            batch_articles_norm_pop = tf.gather(self.articles_recent_pop_norm, tf.expand_dims(item_ids, -1))
 
             if self.plot_histograms:
-                tf.summary.histogram('batch_articles_pop/'+summary_suffix, family='stats',
-                                  values=tf.boolean_mask(batch_articles_pop, tf.cast(tf.sign(item_ids), tf.bool)))
+                tf.summary.histogram('batch_articles_norm_pop/'+summary_suffix, family='stats',
+                                  values=tf.boolean_mask(batch_articles_norm_pop, tf.cast(tf.sign(item_ids), tf.bool)))
+
             
-            batch_articles_pop_norm = self.normalize_popularity_feature(batch_articles_pop, item_ids)
+            return batch_articles_norm_pop
+
+    def get_items_pop_novelty_feature(self, items_norm_pop):
+        return -log_base(items_norm_pop, self.popularity_smooth_log_base)
+
+    def get_items_pop_novelty_feature_standardized(self, item_ids, summary_suffix=''):
+        #Computing POPULARITY feature
+        with tf.variable_scope("items_novelty_feature"):   
+
+            #Computing global recency stats from buffer
+            #recent_items_unique = self.get_unique_items_from_pop_recent_buffer()            
+            last_clicked_items = self.get_last_items_from_recent_clicks_buffer(self.recent_clicks_for_normalization)
+            recent_items_norm_pop = self.get_items_norm_popularity_feature(last_clicked_items, summary_suffix=summary_suffix+'_global')
+            recent_items_novelty = self.get_items_pop_novelty_feature(recent_items_norm_pop)
+
+            tf.summary.scalar('recent_items_novelty/'+summary_suffix, family='stats',
+                                    tensor=tf.reduce_mean(recent_items_novelty))
+
+
+            batch_articles_norm_pop_input = self.get_items_norm_popularity_feature(item_ids, summary_suffix=summary_suffix)
+
+            batch_articles_novelty = self.get_items_pop_novelty_feature(batch_articles_norm_pop_input)
+
+            batch_articles_novelty_non_zero = tf.boolean_mask(batch_articles_novelty, tf.cast(tf.sign(item_ids), tf.bool))
+                        
+            if self.plot_histograms:
+                tf.summary.histogram('batch_articles_novelty/'+summary_suffix, family='stats',
+                                  values=batch_articles_novelty_non_zero)
+
+            tf.summary.scalar('batch_items_novelty/'+summary_suffix, family='stats',
+                                    tensor=tf.reduce_mean(batch_articles_novelty_non_zero))
+
+            #If there aren't recent items available in the buffer (first batch), use batch items (zeroed matrix) to compute norm stats
+            #After that, do not use batch to compute mean and stddev, to avoid leak
+            tensor_to_get_stats_from = tf.cond(tf.equal(tf.shape(last_clicked_items)[0], tf.constant(0)), 
+                                               lambda: batch_articles_novelty_non_zero,
+                                               lambda: recent_items_novelty)
+            
+            #Applying standardization
+            batch_items_novelty_standardized = self.normalize_values(batch_articles_novelty, 
+                                                        tensor_to_get_stats_from, 
+                                                        summary_suffix='novelty/'+summary_suffix)
 
             if self.plot_histograms:
-                tf.summary.histogram('batch_articles_pop_norm/'+summary_suffix, family='stats',
-                                 values=tf.boolean_mask(batch_articles_pop_norm, tf.cast(tf.sign(item_ids), tf.bool)))
+                tf.summary.histogram('batch_items_novelty_standardized/'+summary_suffix, family='stats',
+                                  values=batch_items_novelty_standardized)
+
             
-            return batch_articles_pop_norm
+            return batch_items_novelty_standardized
 
                                  
     
@@ -812,32 +1016,33 @@ class NARModuleModel():
             elapsed_days_since_publishing_log, batch_articles_creation_date = \
                         self.get_items_recency_feature(item_ids, events_timestamp, summary_suffix=summary_suffix)
 
-            #Computing POPULARITY feature          
-            batch_articles_pop_log = self.get_items_popularity_feature(item_ids,
+            batch_articles_novelty = self.get_items_pop_novelty_feature_standardized(item_ids,
                                                                        summary_suffix=summary_suffix) 
 
+            #Including dynamic item features, according to configuration
+            dynamic_features = []
+            if self.internal_features_config['recency']:
+                dynamic_features.append(elapsed_days_since_publishing_log)
+            if self.internal_features_config['novelty']:
+                dynamic_features.append(batch_articles_novelty)
 
-
-            dynamic_features_concat = tf.concat([elapsed_days_since_publishing_log,
-                                                 batch_articles_pop_log],
-                                                axis=2)
-
-        return dynamic_features_concat
+            if len(dynamic_features) > 0:
+                return tf.concat(dynamic_features, axis=-1)
+            else:
+                return None
             
     def get_sample_from_recently_clicked_items_buffer(self, sample_size):
         with tf.variable_scope("neg_samples_buffer"):
             pop_recent_items_buffer_masked = tf.boolean_mask(self.pop_recent_items_buffer,
                                                       tf.cast(tf.sign(self.pop_recent_items_buffer), tf.bool)) 
             
-            unique_pop_recent_items_buffer_masked, _ = tf.unique(pop_recent_items_buffer_masked)
             #tf.summary.scalar('unique_clicked_items_on_buffer', family='stats', tensor=tf.shape(unique_pop_recent_items_buffer_masked)[0])
             tf.summary.scalar('clicked_items_on_buffer', family='stats', tensor=tf.shape(pop_recent_items_buffer_masked)[0])
             
             #recent_items_unique_sample, idxs = tf.unique(tf.random_shuffle(pop_recent_items_buffer_masked)[:sample_size*sample_size_factor_to_look_for_unique])
-            recent_items_unique_sample = tf.random_shuffle(unique_pop_recent_items_buffer_masked)
+            recent_items_unique_sample = tf.random_shuffle(pop_recent_items_buffer_masked)
             
             #Samples K articles from recent articles
-            #sample_recent_articles_ids = tf.random_shuffle(articles_metadata_creation_date_past_only)[:recent_articles_samples_for_eval][:,self.articles_metadata_columns_dict['article_id']]
             sample_recently_clicked_items = recent_items_unique_sample[:sample_size]
             return sample_recently_clicked_items
     
@@ -845,70 +1050,134 @@ class NARModuleModel():
     def get_masked_seq_values(self, tensor):
         return tf.boolean_mask(tensor, self.item_clicked_mask, name='masked_values')      
 
-    
-    def get_negative_samples(self, item_clicked, candidate_samples):  
-        with tf.variable_scope("negative_samples"):      
-            current_batch_size = tf.shape(item_clicked)[0]
-            
-            #Repeating all unique items for each sample in the batch
-            batch_candidate_negative_items = tf.reshape(tf.tile(candidate_samples, [self.batch_size]), [self.batch_size,-1])
-            #Reducing rows if batch size is lower than the default (last step)
-            batch_candidate_negative_items = batch_candidate_negative_items[:current_batch_size,:]        
-            #For each batch sample, filters out session items to keep only negative items 
-            #Ps. remove last columns (according to max session size) to remove padding zeros. 
-            #    Side effect is that higher item ids are ignored for shorter sessions (because set_difference() sorts ids increasinly)
-            batch_negative_items = tf.sparse_tensor_to_dense(tf.sets.set_difference(batch_candidate_negative_items, 
-                                                                                    item_clicked))
-            return batch_negative_items
-         
-    def get_batch_negative_samples(self, item_clicked, additional_samples, num_negative_samples):
-        with tf.variable_scope("neg_samples_batch"):
-            current_batch_size, batch_max_session_length = tf.shape(item_clicked)[0], tf.shape(item_clicked)[1] 
+    def get_neg_items_click(self, valid_samples_session, num_neg_samples):
+        #Shuffles neg. samples for each click
+        valid_samples_shuffled = tf.random.shuffle(valid_samples_session)
 
-            batch_items = tf.reshape(item_clicked, [-1])
+        
+        samples_unique_vals, samples_unique_idx = tf.unique(valid_samples_shuffled)
+
+        #Returning first N unique items (to avoid repetition)
+        first_unique_items = tf.unsorted_segment_min(data=valid_samples_shuffled,                   
+                                           segment_ids=samples_unique_idx,                        
+                                           num_segments=tf.shape(samples_unique_vals)[0])[:num_neg_samples]
+
+        #Padding if necessary to keep the number of neg samples constant (ex: first batch)
+        first_unique_items_padded_if_needed = tf.concat([first_unique_items, tf.zeros(num_neg_samples-tf.shape(first_unique_items)[0], tf.int64)], axis=0)
+
+        return first_unique_items_padded_if_needed                            
+
+
+    def get_neg_items_session(self, session_item_ids, candidate_samples, num_neg_samples):
+        #Ignoring negative samples clicked within the session (keeps the order and repetition of candidate_samples)
+        valid_samples_session, _ = tf.setdiff1d(candidate_samples, session_item_ids, index_dtype=tf.int64)
+
+        #Generating a random list of negative samples for each click (with no repetition)
+        session_clicks_neg_items = tf.map_fn(lambda click_id: tf.cond(tf.equal(click_id, tf.constant(0, tf.int64)), 
+                                                                      lambda: tf.zeros(num_neg_samples, tf.int64),
+                                                                      lambda: self.get_neg_items_click(valid_samples_session, num_neg_samples)
+                                                                      )
+                                             , session_item_ids)                                                     
+
+        return session_clicks_neg_items
+        
+
+    def get_negative_samples(self, all_clicked_items, candidate_samples, num_neg_samples):  
+        with tf.variable_scope("negative_samples"):      
+            #Shuffling negative samples by session and limiting to num_neg_samples
+            shuffled_neg_samples = tf.map_fn(lambda session_item_ids: self.get_neg_items_session(session_item_ids, 
+                                                                                                 candidate_samples, 
+                                                                                                 num_neg_samples)
+                                            , all_clicked_items)
+
+            return shuffled_neg_samples
+         
+    def get_batch_negative_samples(self, all_clicked_items, additional_samples, num_negative_samples, 
+                                         first_sampling_multiplying_factor=20):
+        with tf.variable_scope("neg_samples_batch"):
+            #current_batch_size, batch_max_session_length = tf.shape(item_clicked)[0], tf.shape(item_clicked)[1] 
+
+            batch_items = tf.reshape(all_clicked_items, [-1])
+            
             #Removing padded (zeroed) items
-            batch_items_unique, _ = tf.unique(tf.boolean_mask(batch_items, tf.cast(tf.sign(batch_items), dtype=tf.bool)))
+            batch_items_non_zero = tf.boolean_mask(batch_items, tf.cast(tf.sign(batch_items), dtype=tf.bool))
+
+            #TEMP: uniform sampling -> popularity sampling
+            #batch_items_unique, _ = tf.unique(batch_items_non_zero)
+            batch_items_unique = batch_items_non_zero
+            
                             
             #Concatenating batch items with additional samples (to deal with small batches)
-            candidate_neg_items = tf.concat([batch_items_unique, additional_samples], axis=0)        
-            
-            #Ignoring zeroes in the end of neg. samples matrix
-            batch_negative_items = self.get_negative_samples(item_clicked, candidate_neg_items) \
-                                   [:, :-tf.maximum(1,batch_max_session_length-1)]         
+            candidate_neg_items = tf.concat([batch_items_unique, additional_samples], axis=0)     
 
-            #Randomly picks K negative samples for each batch sample 
-            #Ps. transpose() is necessary because random_shuffle() only shuffles first dimension, and we want to shuffle the second dimension
-            #batch_negative_items = tf.transpose(tf.random_shuffle(tf.transpose(batch_negative_items)))[:,:num_negative_samples]
-            
-            batch_negative_items = shuffle_columns(batch_negative_items)[:,:num_negative_samples]
+            #Shuffling candidates and sampling the first 20N (1000 if neg_samples=50)
+            candidate_neg_items_shuffled = tf.random.shuffle(candidate_neg_items)[:(num_negative_samples*first_sampling_multiplying_factor)]
+
+            batch_negative_items = self.get_negative_samples(all_clicked_items, candidate_neg_items_shuffled, num_negative_samples) 
             
             return batch_negative_items
 
-            
-    def build_rnn(self, the_input, lengths, rnn_units=256):    
+    
+    #Good reference: https://github.com/tensorflow/magenta/blob/master/magenta/models/shared/events_rnn_graph.py
+    def build_rnn(self, the_input, lengths, rnn_units=256, residual_connections=False):    
         with tf.variable_scope("RNN"):    
             fw_cells = []
-            for _ in range(self.rnn_num_layers):
+            #bw_cells = []
+
+            #Hint: Use tf.contrib.rnn.InputProjectionWrapper if the number of units between layers is different
+            for i in range(self.rnn_num_layers):
                 #cell = tf.nn.rnn_cell.GRUCell(rnn_units)  
-                cell = tf.nn.rnn_cell.LSTMCell(rnn_units, state_is_tuple=True)              
+                #cell = tf.nn.rnn_cell.LSTMCell(rnn_units, state_is_tuple=True)        
+                cell = tf.contrib.rnn.UGRNNCell(rnn_units) 
+
+                if residual_connections:
+                    cell = tf.contrib.rnn.ResidualWrapper(cell)
+                    if i == 0: #or rnn_layer_sizes[i] != rnn_layer_sizes[i - 1]:
+                        #cell = tf.contrib.rnn.InputProjectionWrapper(cell, rnn_layer_sizes[i])  
+                        cell = tf.contrib.rnn.InputProjectionWrapper(cell, rnn_units)  
+                
+                '''
+                cell = tf.contrib.rnn.AttentionCellWrapper(cell, 
+                                                     attn_length=20,
+                                                     state_is_tuple=True)
+                '''
+
                 cell = tf.nn.rnn_cell.DropoutWrapper(cell, 
-                                                     output_keep_prob=self.keep_prob, 
-                                                     input_keep_prob=self.keep_prob)
+                                                     output_keep_prob=self.keep_prob 
+                                                     #, input_keep_prob=self.keep_prob
+                                                     )
                 fw_cells.append(cell)   
-            
+
+
             fw_stacked_cells = tf.contrib.rnn.MultiRNNCell(fw_cells, state_is_tuple=True)
+            #bw_stacked_cells = tf.contrib.rnn.MultiRNNCell(bw_cells, state_is_tuple=True)
+
             rnn_outputs, rnn_final_hidden_state_tuples = \
                 tf.nn.dynamic_rnn(fw_stacked_cells, the_input, dtype=tf.float32, sequence_length=lengths)
 
+            '''            
+            outputs, states  = tf.nn.bidirectional_dynamic_rnn(
+                cell_fw=fw_stacked_cells,
+                cell_bw=bw_stacked_cells,
+                dtype=tf.float32, #tf.float64,
+                sequence_length=lengths,
+                inputs=the_input)
+
+            #output_fw, output_bw = outputs
+            #states_fw, states_bw = states
+            #last_lstm_output = output_fw[:,-1,:]
+            rnn_outputs = tf.concat(outputs, axis=2)
+            '''
+
             if self.plot_histograms:
-                tf.summary.histogram("rnn/outputs", rnn_outputs)       
+                tf.summary.histogram("rnn/outputs", rnn_outputs)   
             
             return rnn_outputs
     
-    def create_item_embed_lookup_variable(self):        
-        with tf.variable_scope("item_embedding"):          
-            self.content_embedding_variable = tf.Variable(self.content_article_embeddings_matrix,
-                                                          trainable=False)
+    #def create_item_embed_lookup_variable(self):        
+    #    with tf.variable_scope("item_embedding"):          
+    #        self.content_embedding_variable = tf.Variable(self.content_article_embeddings_matrix, #collections=[],
+    #                                                      trainable=False)
 
 
 
@@ -919,24 +1188,43 @@ class NARModuleModel():
 
 class ClickedItemsState:
     
-    def __init__(self, recent_clicks_buffer_size, num_items):
-        self.recent_clicks_buffer_size = recent_clicks_buffer_size
+    def __init__(self, recent_clicks_buffer_hours, recent_clicks_buffer_max_size, recent_clicks_for_normalization, num_items):
+        self.recent_clicks_buffer_hours = recent_clicks_buffer_hours
+        self.recent_clicks_buffer_max_size = recent_clicks_buffer_max_size
+        self.recent_clicks_for_normalization = recent_clicks_for_normalization
         self.num_items = num_items           
         self.reset_state()
         
     def reset_state(self):
         #Global state
-        self.articles_pop = np.zeros(shape=[self.num_items], dtype=np.int64)
-        self.pop_recent_clicks_buffer = np.zeros(shape=[self.recent_clicks_buffer_size], dtype=np.int64)
+        self.articles_pop = np.zeros(shape=[self.num_items], dtype=np.int64)    
+            
+        self.articles_recent_pop = np.zeros(shape=[self.num_items], dtype=np.int64)
+        self._update_recent_pop_norm(self.articles_recent_pop)
+
+        #Clicked buffer has two columns (article_id, click_timestamp)
+        self.pop_recent_clicks_buffer = np.zeros(shape=[self.recent_clicks_buffer_max_size, 2], dtype=np.int64)
+        self.pop_recent_buffer_article_id_column = 0
+        self.pop_recent_buffer_timestamp_column = 1
+
+
         #State shared by ItemCooccurrenceRecommender and ItemKNNRecommender
-        self.items_coocurrences = csr_matrix((self.num_items, self.num_items), dtype=np.int64)
+        self.items_coocurrences = csr_matrix((self.num_items, self.num_items), dtype=np.int64)    
+        #Stores the timestamp of the first click in the item
+        self.items_first_click_ts = dict()
+        #Stores the delay (in minutes) from item's first click to item's first recommendation from CHAMELEON
+        self.items_delay_for_first_recommendation = dict()
         #States specific for benchmarks
         self.benchmarks_states = dict()
+
         
     def save_state_checkpoint(self):
         self.articles_pop_chkp = np.copy(self.articles_pop)
         self.pop_recent_clicks_buffer_chkp = np.copy(self.pop_recent_clicks_buffer)
         self.items_coocurrences_chkp = csr_matrix.copy(self.items_coocurrences)
+        #self.items_coocurrences_chkp = lil_matrix.copy(self.items_coocurrences)
+        self.items_first_click_ts_chkp = deepcopy(self.items_first_click_ts)
+        self.items_delay_for_first_recommendation_chkp = deepcopy(self.items_delay_for_first_recommendation)
         self.benchmarks_states_chkp = deepcopy(self.benchmarks_states)
         
     def restore_state_checkpoint(self):
@@ -946,42 +1234,151 @@ class ClickedItemsState:
         del self.pop_recent_clicks_buffer_chkp
         self.items_coocurrences = self.items_coocurrences_chkp
         del self.items_coocurrences_chkp
+        self.items_first_click_ts = self.items_first_click_ts_chkp
+        del self.items_first_click_ts_chkp
+        self.items_delay_for_first_recommendation = self.items_delay_for_first_recommendation_chkp
+        del self.items_delay_for_first_recommendation_chkp
         self.benchmarks_states = self.benchmarks_states_chkp
         del self.benchmarks_states_chkp
         
     def get_articles_pop(self):
         return self.articles_pop
+
+    def get_articles_recent_pop(self):
+        return self.articles_recent_pop
+
+    def get_articles_recent_pop_norm(self):
+        return self.articles_recent_pop_norm
     
     def get_recent_clicks_buffer(self):
-        return self.pop_recent_clicks_buffer
-    
-    def get_articles_pop_from_recent_clicks_buffer(self):
-        recent_clicks_buffer_nonzero = self.pop_recent_clicks_buffer[np.nonzero(self.pop_recent_clicks_buffer)]
-        recent_clicks_item_counter = Counter(recent_clicks_buffer_nonzero)
-        
-        pop_recently_clicked = np.zeros(shape=[self.num_items], dtype=np.int64)
-        pop_recently_clicked[list(recent_clicks_item_counter.keys())] = list(recent_clicks_item_counter.values())
-                
-        return pop_recently_clicked
+        #Returns only the first column (article_id)
+        return self.pop_recent_clicks_buffer[:,self.pop_recent_buffer_article_id_column]
     
     def get_items_coocurrences(self):
         return self.items_coocurrences
+
+
+    def update_items_first_click_ts(self, batch_clicked_items, batch_clicked_timestamps):
+
+        batch_item_ids = batch_clicked_items.reshape(-1)
+        batch_clicks_timestamp = batch_clicked_timestamps.reshape(-1)
+        sorted_item_clicks = sorted(zip(batch_clicks_timestamp, batch_item_ids))
+
+        for click_ts, item_id in sorted_item_clicks:
+            if item_id != 0 and click_ts == 0:
+                tf.logging.warn('Item {} has timestamp {}. Original clicked_items: {}. Original timestamps: {}'.format(item_id, click_ts, batch_clicked_items, batch_clicked_timestamps))
+            #Ignoring padded items
+            elif item_id != 0 and (not item_id in self.items_first_click_ts or click_ts < self.items_first_click_ts[item_id]):
+                self.items_first_click_ts[item_id] = click_ts
+
+
+    def update_items_delay_for_first_recommendation(self, batch_rec_items, batch_click_timestamps, topn):
+        batch_top_rec_ids = batch_rec_items[:,:,:topn]
+
+        #Repeating last dimension of click timestamp to the number of recommendations, to make matrices compatible
+        batch_rec_timestamp = np.tile(batch_click_timestamps, (1,1,topn))
+
+        batch_top_rec_ids = batch_top_rec_ids.reshape(-1)
+        batch_rec_timestamp = batch_rec_timestamp.reshape(-1)
+
+        sorted_item_recs = list(sorted(zip(batch_rec_timestamp, batch_top_rec_ids)))
+
+        neg_delay = 0
+        valid_delay = 0
+        for rec_ts, item_id in sorted_item_recs:
+            #Ignoring padded items
+            if rec_ts != 0 and item_id != 0:
+                if item_id in self.items_first_click_ts:
+                    delay_minutes = (rec_ts - self.items_first_click_ts[item_id]) / (1000. * 60.)
+
+                    if delay_minutes > 0 and \
+                        (not item_id in self.items_delay_for_first_recommendation or \
+                         delay_minutes < self.items_delay_for_first_recommendation[item_id]):
+
+                        #tf.logging.info('rec_ts: {}, items_first_click_ts: {}, delay: {}'.format(rec_ts, self.items_first_click_ts[item_id], delay))
+                        self.items_delay_for_first_recommendation[item_id] = delay_minutes
+                #else:
+                #    tf.logging.warn('Item {} not found in clicked items'.format(item_id))
+
+
+    def log_stats_time_for_first_rec(self):
+        #tf.logging.info('log_stats_time_for_first_rec: {}'.format(len(self.items_delay_for_first_recommendation)))
+        if len(self.items_delay_for_first_recommendation) > 0:
+            values = np.array(list(self.items_delay_for_first_recommendation.values()))
+            stats = {'min': np.min(values),
+                    '10%': np.percentile(values, 10),
+                    '25%': np.percentile(values, 25),
+                    '50%': np.percentile(values, 50),
+                    '75%': np.percentile(values, 75),
+                    '90%': np.percentile(values, 90),
+                    'max': np.max(values),
+                    'mean': np.mean(values),
+                    'std': np.std(values)
+                     }
+
+            tf.logging.info('Stats on delay for first recommendation since first click: {}'.format(stats))
+
+
+            #Crossing popularity with time for first rec
+            items_pop_time_for_first_rec = []
+            for item_id in self.items_delay_for_first_recommendation.keys():
+                time_for_first_rec = self.items_delay_for_first_recommendation[item_id]
+                item_pop = self.articles_pop[item_id]
+                items_pop_time_for_first_rec.append((item_pop, time_for_first_rec))
+
+            items_pop_time_for_first_rec_df = pd.DataFrame(items_pop_time_for_first_rec, columns=['pop', 'time_to_rec'])
+            #Binning popularity
+            items_pop_time_for_first_rec_df['pop_deciles_binned'] = pd.qcut(items_pop_time_for_first_rec_df['pop'], 10, duplicates='drop')
+            time_to_rec_by_popularity_df = items_pop_time_for_first_rec_df.groupby('pop_deciles_binned')['time_to_rec'].agg(['median', 'mean', 'std'])
+
+            tf.logging.info('Stats on delay for first recommendation since first click (BY POPULARITY): {}'.format(time_to_rec_by_popularity_df))
     
-    def _get_non_zero_items_vector(self, batch_clicked_items):
-        #Converting batch items to a vector sorted by last clicked items in sessions
-        batch_items_vector = batch_clicked_items.T.reshape(-1)[::-1]
-        return batch_items_vector[np.nonzero(batch_items_vector)]
-    
-    def update_items_state(self, batch_clicked_items):
-        batch_items_nonzero = self._get_non_zero_items_vector(batch_clicked_items)
-        self._update_recently_clicked_items_buffer(batch_items_nonzero)
-        self._update_pop_items(batch_items_nonzero)        
+    def update_items_state(self, batch_clicked_items, batch_clicked_timestamps):
+        #batch_items_nonzero = self._get_non_zero_items_vector(batch_clicked_items)
+
+        self._update_recently_clicked_items_buffer(batch_clicked_items, batch_clicked_timestamps)
+        self._update_recent_pop_items()
+
+        self._update_pop_items(batch_clicked_items)        
             
-    def _update_recently_clicked_items_buffer(self, batch_items_nonzero):
-        #TODO: Keep on buffer based on time (e.g. last X hours), and not on last N clicks
-        #Updating buffer with latest clicked elements
-        self.pop_recent_clicks_buffer = np.hstack([batch_items_nonzero, self.pop_recent_clicks_buffer])[:self.recent_clicks_buffer_size]
+    
+    def _update_recently_clicked_items_buffer(self, batch_clicked_items, batch_clicked_timestamps):
+        MILISECS_BY_HOUR = 1000 * 60 * 60
+
+        #Concatenating column vectors of batch clicked items
+        batch_recent_clicks_timestamps = np.hstack([batch_clicked_items.reshape(-1,1), batch_clicked_timestamps.reshape(-1,1)])
+        #Inverting the order of clicks, so that latter clicks are now the first in the vector
+        batch_recent_clicks_timestamps = batch_recent_clicks_timestamps[::-1]
         
+        #Keeping in the buffer only clicks within the last N hours
+        min_timestamp_batch = np.min(batch_clicked_timestamps)
+        min_timestamp_buffer_threshold = min_timestamp_batch - int(self.recent_clicks_buffer_hours * MILISECS_BY_HOUR)
+        self.pop_recent_clicks_buffer = self.pop_recent_clicks_buffer[self.pop_recent_clicks_buffer[:,self.pop_recent_buffer_timestamp_column]>=min_timestamp_buffer_threshold]
+        #Concatenating batch clicks with recent buffer clicks, limited by the buffer size
+        self.pop_recent_clicks_buffer = np.vstack([batch_recent_clicks_timestamps, self.pop_recent_clicks_buffer])[:self.recent_clicks_buffer_max_size]
+        #Complete buffer with zeroes if necessary
+        if self.pop_recent_clicks_buffer.shape[0] < self.recent_clicks_buffer_max_size:
+            self.pop_recent_clicks_buffer = np.vstack([self.pop_recent_clicks_buffer, 
+                                                       np.zeros(shape=[self.recent_clicks_buffer_max_size-self.pop_recent_clicks_buffer.shape[0], 2], dtype=np.int64)])
+        
+
+    def _update_recent_pop_items(self):
+        #Using all the buffer to compute items popularity
+        pop_recent_clicks_buffer_items = self.pop_recent_clicks_buffer[:, self.pop_recent_buffer_article_id_column]
+        recent_clicks_buffer_nonzero = pop_recent_clicks_buffer_items[np.nonzero(pop_recent_clicks_buffer_items)]
+        recent_clicks_item_counter = Counter(recent_clicks_buffer_nonzero)
+        
+        self.articles_recent_pop = np.zeros(shape=[self.num_items], dtype=np.int64)
+        self.articles_recent_pop[list(recent_clicks_item_counter.keys())] = list(recent_clicks_item_counter.values())
+
+        self._update_recent_pop_norm(self.articles_recent_pop)
+
+    def _update_recent_pop_norm(self, articles_recent_pop):
+        #Minimum value for norm_pop, to avoid 0
+        min_norm_pop = 1.0/self.recent_clicks_for_normalization
+        self.articles_recent_pop_norm = np.maximum(articles_recent_pop / (articles_recent_pop.sum() + 1), 
+                                                   [min_norm_pop])
+
     def _update_pop_items(self, batch_items_nonzero):
         batch_item_counter = Counter(batch_items_nonzero)
         self.articles_pop[list(batch_item_counter.keys())] += list(batch_item_counter.values())
@@ -1002,6 +1399,10 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
     def __init__(self, mode, model, eval_metrics_top_n, 
                  clicked_items_state, eval_sessions_metrics_log,
                  sessions_negative_items_log,
+                 sessions_chameleon_recommendations_log,
+                 content_article_embeddings_matrix,
+                 articles_metadata,
+                 eval_negative_sample_relevance,
                  eval_benchmark_classifiers=[],
                  eval_metrics_by_session_position=False):
 
@@ -1012,15 +1413,27 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
         self.clicked_items_state = clicked_items_state
         self.eval_sessions_metrics_log = eval_sessions_metrics_log
         self.sessions_negative_items_log = sessions_negative_items_log
+        self.sessions_chameleon_recommendations_log = sessions_chameleon_recommendations_log
 
-
-        self.bench_classifiers = [clf['recommender'](self.clicked_items_state,
-                                                     clf['params'],
-                                                     ItemsStateUpdaterHook.create_eval_metrics(self.eval_metrics_top_n)) for clf in eval_benchmark_classifiers]
+        self.content_article_embeddings_matrix = content_article_embeddings_matrix
+        self.articles_metadata = articles_metadata
+        self.eval_negative_sample_relevance = eval_negative_sample_relevance
         self.eval_metrics_by_session_position = eval_metrics_by_session_position
+
+        self.bench_classifiers = list([clf['recommender'](self.clicked_items_state,
+                                                     clf['params'],
+                                                     ItemsStateUpdaterHook.create_eval_metrics(self.eval_metrics_top_n, 
+                                                                                               self.eval_negative_sample_relevance,
+                                                                                               #False, 
+                                                                                               self.eval_metrics_by_session_position,
+                                                                                               self.content_article_embeddings_matrix,
+                                                                                               self.articles_metadata,
+                                                                                               self.clicked_items_state)) for clf in eval_benchmark_classifiers])
+        
 
     def begin(self):        
         if self.mode == tf.estimator.ModeKeys.EVAL:
+
             tf.logging.info("Saving items state checkpoint from train")
             #Save state of items popularity and recency from train loop, to restore after evaluation finishes
             self.clicked_items_state.save_state_checkpoint()  
@@ -1030,7 +1443,12 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
             for clf in self.bench_classifiers:
                 clf.reset_eval_metrics()
 
-            self.streaming_metrics = ItemsStateUpdaterHook.create_eval_metrics(self.eval_metrics_top_n)
+            self.streaming_metrics = ItemsStateUpdaterHook.create_eval_metrics(self.eval_metrics_top_n, 
+                                                                               self.eval_negative_sample_relevance,
+                                                                               self.eval_metrics_by_session_position,
+                                                                               self.content_article_embeddings_matrix,
+                                                                               self.articles_metadata,
+                                                                               self.clicked_items_state)
             #self.metrics_by_session_pos = StreamingMetrics(topn=self.metrics_top_n)
                 
             self.stats_logs = []
@@ -1039,55 +1457,54 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
     #Runs before every batch
     def before_run(self, run_context): 
         fetches = {'clicked_items': self.model.item_clicked,
+                   'clicked_timestamps': self.model.event_timestamp,
                    'next_item_labels': self.model.next_item_label,
-                   'last_item_label': self.model.label_last_item,
+                   'last_item_label': self.model.label_last_item,                   
                    'session_id': self.model.session_id,
-                   'session_start': self.model.session_start,
+                   #'session_start': self.model.session_start,
                    'user_id': self.model.user_id,
                    }
 
-        
+        #Commenting to improve performance during training
+        #fetches['predicted_item_ids'] = self.model.predicted_item_ids
+
         if self.mode == tf.estimator.ModeKeys.EVAL:
             fetches['eval_batch_negative_items'] = self.model.batch_negative_items
             fetches['batch_items_count'] = self.model.batch_items_count
             fetches['batch_unique_items_count'] = self.model.batch_unique_items_count
-            
-            fetches['hitrate_at_1'] = self.model.next_item_accuracy_at_1_update_op
+
             fetches['hitrate_at_n'] = self.model.recall_at_n_update_op
             fetches['mrr_at_n'] = self.model.mrr_update_op
             #fetches['ndcg_at_n'] = self.model.ndcg_at_n_mean_update_op
             
             fetches['predicted_item_ids'] = self.model.predicted_item_ids
-
-            
-            
-
+            fetches['predicted_item_probs'] = self.model.items_top_prob_values
         
         feed_dict = {
-            self.model.articles_pop: self.clicked_items_state.get_articles_pop(),
-            self.model.pop_recent_items_buffer: self.clicked_items_state.get_recent_clicks_buffer(),
-            self.model.articles_pop_recently_clicked: self.clicked_items_state.get_articles_pop_from_recent_clicks_buffer()
-        }               
+            self.model.articles_recent_pop_norm: self.clicked_items_state.get_articles_recent_pop_norm(),            
+            self.model.pop_recent_items_buffer:  self.clicked_items_state.get_recent_clicks_buffer(), 
+            #Passed as placeholder (and not as a constant) to avoid been saved in checkpoints
+            self.model.content_article_embeddings_matrix: self.content_article_embeddings_matrix           
+        }         
+
+        #Passed as placeholder (and not as a constant) to avoid been saved in checkpoints
+        for feature_name in self.articles_metadata:
+            feed_dict[self.model.articles_metadata[feature_name]] = self.articles_metadata[feature_name]
 
         return tf.train.SessionRunArgs(fetches=fetches,
                                        feed_dict=feed_dict)
     
     
     def evaluate_and_update_streaming_metrics_last(self, clf, users_ids, clicked_items, next_item_labels, eval_negative_items):
+        tf.logging.info('Evaluating benchmark: {}'.format(clf.get_description()))  
         clf_metrics = clf.evaluate(users_ids, clicked_items, next_item_labels, topk=self.eval_metrics_top_n, 
                                    eval_negative_items=eval_negative_items)
         self.eval_streaming_metrics_last = merge_two_dicts(self.eval_streaming_metrics_last, clf_metrics)
 
-
-    def evaluate_metrics_by_session_pos(self, predictions, labels):
-        recall_by_session_pos, recall_total_by_session_pos = self.metrics_by_session_pos.recall_at_n_by_session_pos(predictions, labels, self.metrics_top_n)
-        recall_by_session_pos_dict = dict([("recall_by_session_pos_{0:02d}".format(key), recall_by_session_pos[key]) for key in recall_by_session_pos])
-        sessions_length_dict = dict([("sessions_length_count_{0:02d}".format(key), recall_total_by_session_pos[key]) for key in recall_total_by_session_pos])
-        self.eval_streaming_metrics_last = merge_two_dicts(merge_two_dicts(self.eval_streaming_metrics_last, recall_by_session_pos_dict), sessions_length_dict)
-
     #Runs after every batch
     def after_run(self, run_context, run_values):     
         clicked_items = run_values.results['clicked_items']
+        clicked_timestamps = np.squeeze(run_values.results['clicked_timestamps'], axis=-1)
         next_item_labels = run_values.results['next_item_labels']
         last_item_label = run_values.results['last_item_label'] 
 
@@ -1097,77 +1514,135 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
                 
         if self.mode == tf.estimator.ModeKeys.EVAL:
             self.eval_streaming_metrics_last = {}
-            self.eval_streaming_metrics_last['hitrate_at_1'] = run_values.results['hitrate_at_1']
+            #self.eval_streaming_metrics_last['hitrate_at_1'] = run_values.results['hitrate_at_1']
             self.eval_streaming_metrics_last['hitrate_at_n'] = run_values.results['hitrate_at_n']
             self.eval_streaming_metrics_last['mrr_at_n'] = run_values.results['mrr_at_n']
             #self.eval_streaming_metrics_last['ndcg_at_n'] = run_values.results['ndcg_at_n']
 
-
+            #Only for eval, to improve performance during training 
             predicted_item_ids = run_values.results['predicted_item_ids']
-            #tf.logging.info('predicted_item_ids: {}'.format(predicted_item_ids))
-
-            if self.eval_metrics_by_session_position:
-                self.evaluate_metrics_by_session_pos(predicted_item_ids, next_item_labels)
-            
+            tf.logging.info('predicted_item_ids (shape): {}'.format(predicted_item_ids.shape))  
+           
             
             eval_batch_negative_items = run_values.results['eval_batch_negative_items']
+            predicted_item_probs = run_values.results['predicted_item_probs']
 
             if self.sessions_negative_items_log != None:
                 #Acumulating session negative items, to allow evaluation comparison
                 # with benchmarks outsite the framework (e.g. Matrix Factorization) 
-                for session_id, neg_items in zip(sessions_ids,
-                                                 eval_batch_negative_items):                    
-                    self.sessions_negative_items_log.append({'session_id': str(session_id), #Convert numeric session_id to str because large ints are not serializable
-                                                         'negative_items': neg_items})
+                for session_id, labels, neg_items in zip(sessions_ids,
+                                                 next_item_labels,
+                                                 eval_batch_negative_items):  
 
-            batch_stats = {'eval_sampled_negative_items': eval_batch_negative_items.shape[1],
+                    self.sessions_negative_items_log.append({'session_id': str(session_id), #Convert numeric session_id to str because large ints are not serializable
+                                                         'negative_items': list([neg_items_click for label, neg_items_click in zip(labels.tolist(), 
+                                                                                                                                   neg_items.tolist()) if label != 0])})
+
+
+            if self.sessions_chameleon_recommendations_log != None:
+                predicted_item_probs = run_values.results['predicted_item_probs']
+                predicted_item_probs_rounded = predicted_item_probs.round(decimals=7)
+
+                articles_recent_pop_norm = self.clicked_items_state.get_articles_recent_pop_norm()
+
+                #Acumulating CHAMELEON predictions, labels, scores, accuracy, novelty and diversity to allow greed re-ranking approachs (e.g. MMR)
+                for session_id, labels, pred_item_ids, pred_item_probs \
+                                           in zip(sessions_ids,
+                                                 next_item_labels, 
+                                                 predicted_item_ids,
+                                                 predicted_item_probs_rounded
+                                                 ):   
+
+                    #Reducing the precision to 5 decimals for serialization
+                    pred_item_norm_pops = articles_recent_pop_norm[pred_item_ids].round(decimals=7)
+
+                    labels_filtered = []
+                    pred_item_ids_filtered = []
+                    pred_item_probs_filtered = []
+                    pred_item_norm_pops_filtered = []
+
+                    for label, pred_item_ids_click, pred_item_probs_click, pred_item_norm_pops_click \
+                                                        in zip(labels.tolist(),
+                                                               pred_item_ids.tolist(),
+                                                               pred_item_probs.tolist(),
+                                                               pred_item_norm_pops.tolist()):
+                        if label != 0:
+                            labels_filtered.append(label)
+                            pred_item_ids_filtered.append(pred_item_ids_click)
+                            pred_item_probs_filtered.append(pred_item_probs_click)
+                            pred_item_norm_pops_filtered.append(pred_item_norm_pops_click)
+
+
+                    to_append = {'session_id': str(session_id), #Convert numeric session_id to str because large ints are not serializable
+                                                                'next_click_labels': labels_filtered,
+                                                                'predicted_item_ids': pred_item_ids_filtered,
+                                                                'predicted_item_probs': pred_item_probs_filtered,
+                                                                'predicted_item_norm_pop': pred_item_norm_pops_filtered
+                                                                }
+                    self.sessions_chameleon_recommendations_log.append(to_append) 
+
+            batch_stats = {#'eval_sampled_negative_items': eval_batch_negative_items.shape[1],
                            'batch_items_count': run_values.results['batch_items_count'],
                            'batch_unique_items_count': run_values.results['batch_unique_items_count'],
                            'batch_sessions_count': len(sessions_ids)
-                           #'recent_items_buffer_filled': np.count_nonzero(clicked_items_state.get_recent_clicks_buffer()),
                           }
             self.stats_logs.append(batch_stats)
             tf.logging.info('batch_stats: {}'.format(batch_stats))
 
+            preds_norm_pop = self.clicked_items_state.get_articles_recent_pop_norm()[predicted_item_ids]
+
+            
+            labels_norm_pop = self.clicked_items_state.get_articles_recent_pop_norm()[next_item_labels]
 
             #Computing metrics for this neural model
-            model_metrics_values = compute_metrics(predicted_item_ids, next_item_labels, 
+            update_metrics(predicted_item_ids, next_item_labels, labels_norm_pop, preds_norm_pop, clicked_items,
                                             self.streaming_metrics, 
-                                            metrics_suffix='main')            
+                                            recommender='chameleon')  
+            model_metrics_values = compute_metrics_results(self.streaming_metrics, 
+                                            recommender='chameleon')            
             self.eval_streaming_metrics_last = merge_two_dicts(self.eval_streaming_metrics_last, 
                                                                model_metrics_values)
             
+            
+            
+            start_eval = time()
             #Computing metrics for Benchmark recommenders
-            for clf in self.bench_classifiers:
-                tf.logging.info('Evaluating benchmark: {}'.format(clf.get_description()))    
+            for clf in self.bench_classifiers:                    
                 self.evaluate_and_update_streaming_metrics_last(clf, users_ids, 
                                 clicked_items, next_item_labels, eval_batch_negative_items)
+            tf.logging.info('Total elapsed time evaluating benchmarks: {}'.format(time() - start_eval))            
+
             tf.logging.info('Finished benchmarks evaluation')
 
         #Training benchmark classifier
         for clf in self.bench_classifiers:
-            #As for GCom dataset session_ids are not timestamps, generating artificial session_ids 
-            # by concatenating session_start with hashed session ids to make it straightforward to sort them by time
-            #TODO: In the next generation of Gcom dataset, make this transformation before saving to TFRecord and remove from here
-            '''
-            sessions_ids_hashed = list([int('{}{}'.format(session_start, hash_str_to_int(session_id, 3))) \
-                             for session_start, session_id in zip(run_values.results['session_start'], 
-                                                                  run_values.results['session_id'])])
-            clf.train(users_ids, sessions_ids_hashed, clicked_items, next_item_labels)
-            '''
+            #It is required that session_ids are sorted by time (ex: first_timestamp+hash_session_id), so that
+            #recommenders that trust in session_id to sort by recency work (e.g. V-SkNN)
             clf.train(users_ids, sessions_ids, clicked_items, next_item_labels)
         
+
         #Concatenating all clicked items in the batch (including last label)
         batch_clicked_items = np.concatenate([clicked_items,last_item_label], axis=1)
+        #Flattening values and removing padding items (zeroes) 
+        batch_clicked_items_flatten = batch_clicked_items.reshape(-1)
+        batch_clicked_items_nonzero = batch_clicked_items_flatten[np.nonzero(batch_clicked_items_flatten)]
+        
+        #As timestamp of last clicks are not available for each session, assuming they are the same than previous session click
+        last_timestamp_batch = np.max(clicked_timestamps, axis=1).reshape(-1,1)
+        batch_clicked_timestamps = np.concatenate([clicked_timestamps,last_timestamp_batch], axis=1)
+        #Flattening values and removing padding items (zeroes)        
+        batch_clicked_timestamps_flatten = batch_clicked_timestamps.reshape(-1)        
+        batch_clicked_timestamps_nonzero = batch_clicked_timestamps_flatten[np.nonzero(batch_clicked_items_flatten)]
+
         #Updating items state
-        self.clicked_items_state.update_items_state(batch_clicked_items)        
+        self.clicked_items_state.update_items_state(batch_clicked_items_nonzero, batch_clicked_timestamps_nonzero)        
         self.clicked_items_state.update_items_coocurrences(batch_clicked_items)
  
     
     def end(self, session=None):
         if self.mode == tf.estimator.ModeKeys.EVAL:    
-            avg_neg_items = np.mean([x['eval_sampled_negative_items'] for x in self.stats_logs])
-            self.eval_streaming_metrics_last['avg_eval_sampled_neg_items'] = avg_neg_items
+            #avg_neg_items = np.mean([x['eval_sampled_negative_items'] for x in self.stats_logs])
+            #self.eval_streaming_metrics_last['avg_eval_sampled_neg_items'] = avg_neg_items
             
             clicks_count = np.sum([x['batch_items_count'] for x in self.stats_logs])
             self.eval_streaming_metrics_last['clicks_count'] = clicks_count
@@ -1176,14 +1651,40 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
             self.eval_streaming_metrics_last['sessions_count'] = sessions_count
                         
             self.eval_sessions_metrics_log.append(self.eval_streaming_metrics_last)
-            eval_metrics_str = '\n'.join(["'{}':\t{:.4f}".format(metric, value) for metric, value in sorted(self.eval_streaming_metrics_last.items())])
+            eval_metrics_str = '\n'.join(["'{}':\t{}".format(metric, value) for metric, value in sorted(self.eval_streaming_metrics_last.items())])
             tf.logging.info("Evaluation metrics: [{}]".format(eval_metrics_str))
             
+            #Logs stats for time delay for the first item recommendation since its first click
+            self.clicked_items_state.log_stats_time_for_first_rec()
+
             tf.logging.info("Restoring items state checkpoint from train")
             #Restoring the original state of items popularity and recency state from train loop
             self.clicked_items_state.restore_state_checkpoint()
 
     @staticmethod
-    def create_eval_metrics(top_n):
-        eval_metrics = [metric(topn=top_n) for metric in [HitRate, MRR]]
+    def create_eval_metrics(top_n, 
+                            eval_negative_sample_relevance,
+                            eval_metrics_by_session_position, 
+                            content_article_embeddings_matrix,
+                            articles_metadata,
+                            clicked_items_state):
+
+        relevance_positive_sample = 1.0
+        #Empirical: The weight of negative samples
+        relevance_negative_samples = eval_negative_sample_relevance     
+
+        recent_clicks_buffer = clicked_items_state.get_recent_clicks_buffer()    
+
+        eval_metrics = [metric(topn=top_n) for metric in [HitRate, MRR, NDCG]]
+
+        eval_metrics.append(ItemCoverage(top_n, recent_clicks_buffer))  
+        eval_metrics.append(ExpectedRankSensitiveNovelty(top_n)) 
+        eval_metrics.append(ExpectedRankRelevanceSensitiveNovelty(top_n, relevance_positive_sample, relevance_negative_samples))
+        eval_metrics.append(ContentExpectedRankRelativeSensitiveIntraListDiversity(top_n, content_article_embeddings_matrix))        
+        eval_metrics.append(ContentExpectedRankRelativeRelevanceSensitiveIntraListDiversity(top_n, content_article_embeddings_matrix, relevance_positive_sample, relevance_negative_samples))
+        #eval_metrics.append(CategoryExpectedIntraListDiversity(top_n, articles_metadata['category_id']))
+
+        if eval_metrics_by_session_position:
+            eval_metrics.append(HitRateBySessionPosition(top_n))
+
         return eval_metrics

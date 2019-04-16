@@ -5,7 +5,10 @@ from __future__ import print_function
 import numpy as np
 from collections import defaultdict
 
-from ..evaluation import compute_metrics
+from time import time
+import tensorflow as tf
+
+from ..evaluation import update_metrics, compute_metrics_results
 
 class BenchmarkRecommender:
     def __init__(self, clicked_items_state, eval_benchmark_params, eval_streaming_metrics):
@@ -26,21 +29,29 @@ class BenchmarkRecommender:
     def train(self, users_ids, sessions_ids, sessions_items, sessions_next_items):
         pass
     
-    def predict(self, users_ids, sessions_items, topk=5):
+    def predict(self, users_ids, sessions_items, topk=5, valid_items=None):
         pass
     
     def evaluate(self, users_ids, sessions_items, sessions_next_items, topk=5, eval_negative_items=None):
         sessions_next_items_expanded = np.expand_dims(sessions_next_items, axis=2)
-        eval_negative_items_expanded = np.tile(np.expand_dims(eval_negative_items, axis=1), 
-                                               reps=[1,sessions_next_items.shape[1],1])
+        
+
+        eval_negative_items_expanded = eval_negative_items
 
         valid_items = np.concatenate([sessions_next_items_expanded, eval_negative_items_expanded], axis=2)
 
-        
         preds = self.predict(users_ids, sessions_items, topk=topk, valid_items=valid_items)
 
-        metrics_values = compute_metrics(preds, sessions_next_items, self.streaming_metrics, 
-                                  metrics_suffix=self.get_clf_suffix())
+        preds_norm_pop = self.clicked_items_state.get_articles_recent_pop_norm()[preds]
+
+        labels_norm_pop = self.clicked_items_state.get_articles_recent_pop_norm()[sessions_next_items]
+
+        update_metrics(preds, sessions_next_items, labels_norm_pop, preds_norm_pop, sessions_items, self.streaming_metrics, 
+                                  recommender=self.get_clf_suffix())
+
+        metrics_values = compute_metrics_results(self.streaming_metrics, 
+                                  recommender=self.get_clf_suffix())
+
         return metrics_values
     
     def _get_top_n_valid_items(self, items, topk, valid_items):

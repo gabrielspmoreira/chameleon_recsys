@@ -1,18 +1,31 @@
 # CHAMELEON - A Deep Learning Meta-Architecture for News Recommender Systems
 CHAMELEON is a Deep Learning Meta-Architecture for News Recommender Systems. It has being developed as part of the Doctoral research of Gabriel de Souza Pereira Moreira, at the Brazilian Aeronautics Institute of Technology ([ITA](http://www.ita.br/)).
 
-The initial version of CHAMELEON source code allows reproducibility of the experiments reported in the following paper (https://arxiv.org/abs/1808.00076) at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/), co-located with ACM RecSys.   
+The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in the following paper (https://arxiv.org/abs/1808.00076) at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/) [1], co-located with ACM RecSys.   
 Please cite as follows:
 
 > Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
 
-This implementation depends on **Python 3** (with Pandas, Scikit-learn and SciPy modules) and **TensorFlow 1.8**. CHAMELEON modules were implemented using TF [Estimators](https://www.tensorflow.org/guide/estimators) and [Datasets](https://www.tensorflow.org/guide/datasets).
+
+The version (v1.5) was released for reproducibility of the experiments reported in the following paper (pre-print) [2]. In that version, item coverage, novelty and diversity metrics are included, an optimized instantiation of CHAMELEON meta-architecture is implemented and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset).
+
+> Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:?, 49 pages
+
+
+This implementation depends on **Python 3** (with Pandas, Scikit-learn and SciPy modules) and **TensorFlow 1.12**. CHAMELEON modules were implemented using TF [Estimators](https://www.tensorflow.org/guide/estimators) and [Datasets](https://www.tensorflow.org/guide/datasets).
 
 The CHAMELEON modules training and evaluation can be performed either locally (GPU highly recommended) or using [Google Cloud Platform ML Engine](https://cloud.google.com/ml-engine/) managed service.
 
 ## Dataset for reproducibility
-The dataset used in paper experiments was kindly shared by [Globo.com](http://globo.com), and made available for reproducibility of the results and also for academic purposes at [Kaggle Datasets](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom).  
-You must download that dataset to be able to run the commands to pre-process, train, and evaluate the CHAMELEON's NAR module, which provides next-click recommendation for user sessions.
+The experiments of the paper *Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks* use the following datasets:
+
+* [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in this [paper](https://doi.org/10.1145/3270323.3270328). With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. The dataset used in paper experiments was kindly shared by [Globo.com](http://globo.com) for this research.
+
+* [SmartMedia Adressa dataset](http://reclab.idi.ntnu.no/dataset) - This dataset contains approximately 20
+million page visits from a Norwegian news portal [91]. In our experiments we used 16 days of the full dataset, which is available upon request, and includes article text and click events of about 2 million users and 13,000 articles.
+
+ 
+You must download these dataset to be able to run the commands to pre-process, train, and evaluate the CHAMELEON's NAR module, which provides next-click recommendation for user sessions.
 
 # CHAMELEON
 The objetive of the CHAMELEON is to provide accurate contextual session-based recommendations for news portals. It is composed of two complementary modules, with independent life cycles for training and inference: the *Article Content Representation (ACR)* and the *Next-Article Recommendation (NAR)* modules, as shown in Figure 1.
@@ -33,7 +46,22 @@ For scalability reasons, *Article Content Embeddings* are not directly trained f
 
 After training, the *Article Content Embeddings* for news articles (NumPy matrix) are persisted into a Pickle dump file, for further usage by *NAR* module.
 
-*P.s. The following subsections commands for ACR module pre-processing and training are not necessary for reproducibility of the paper, since the trained Article Content Embeddings were already been provided in the Globo.com dataset.*
+### Important notes about experiments with the ACR module
+
+It was not possible to share the articles' textual content for [Globo.com dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) due to licensing reasons. Although, it is not necessary to run the ACR module pre-processing and training commands (presented in the following subsections), since the trained Article Content Embeddings were already been provided with the Globo.com dataset.
+
+The creators of the [Adressa dataset](http://reclab.idi.ntnu.no/dataset) can make available the full textual content of articles upon request. After download their data, you must follow this steps:
+
+1. As Adressa is a large dataset, the 1st pre-processing step is performed using Spark. 
+	1. Create a Spark cluster ([dataproc_preprocessing/create_cluster.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/create_cluster.sh)) on GCP Dataproc
+	2. Open a Jupyter session ([dataproc_preprocessing/browse_cluster.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/browse_cluster.sh))
+	3. Upload and run the preprocessing notebook ([dataproc_preprocessing/nar_preprocessing_addressa_01_dataproc.ipynb](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/nar_preprocessing_addressa_01_dataproc.ipynb))
+	4. Download the exported sessions JSON lines and the pickle with nar_encoders_dict to be used by the 2nd step of pre-processing
+	5. Destroy the Spark cluster ([dataproc_preprocessing/destroy_cluster.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/destroy_cluster.sh))
+
+2. Run the 2nd pre-processing step ([run_acr_preprocessing_adressa.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_preprocessing_adressa.sh)) 
+3. Run the training and evaluation script ([run_acr_training_adressa_local.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_training_adressa_local.sh)), to generate the Article Content Embeddings with the ACR module. 
+
 
 ### Pre-processing data for the ACR module
 Here is an example of the command for pre-processing articles text and metadata for the *ACR* module
@@ -52,6 +80,7 @@ python3 -m acr.preprocessing.acr_preprocess_gcom \
  	--output_tf_records_path "${DATA_DIR}/articles_tfrecords/gcom_articles_tokenized_*.tfrecord.gz" \
  	--articles_by_tfrecord 5000
 ```
+
 > From [acr_module/scripts/run_acr_preprocessing_gcom.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_preprocessing_gcom.sh)
 
 ### Training ACR module
@@ -94,21 +123,21 @@ The inputs for the *NAR* module are: (1) the pre-trained *Article Content Embedd
 
 The *NAR* module uses a type of Recurrent Neural Network (RNN) – the Long Short-Term Memory (LSTM) – to model the sequence of articles read by users in their sessions, represented by their *User-Personalized Contextual Article Embeddings*. For each article of the sequence, the RNN outputs a *Predicted Next-Article Embedding* – the expected representation of a news content the user would like to read next in the active session.
 
-In most deep learning architectures proposed for RS, the neural network outputs a vector whose dimension is the number of
-available items. Such approach may work for domains were the items number is more stable, like movies and books. Although, in
-the dynamic scenario of news recommendations, where thousands of news stories are added and removed daily, such approach could require full retrain of the network, as often as new articles are published.  
+In most deep learning architectures proposed for RS, the neural network outputs a vector whose dimension is the number of available items. Such approach may work for domains were the items number is more stable, like movies and books. Although, in the dynamic scenario of news recommendations, where thousands of news stories are added and removed daily, such approach could require full retrain of the network, as often as new articles are published.  
 
 For this reason, instead of using a softmax cross-entropy loss, the NAR module is trained to maximize the similarity between the *Predicted Next-Article Embedding* and the *User-Personalized Contextual Article Embedding* corresponding to the next article actually read by the user in his session (positive sample), whilst minimizing its similarity with negative samples (articles not read by the user during the session). With this strategy to deal with item cold-start, a newly published article might be immediately recommended, as soon as its *Article Content Embedding* is trained and added to a repository.
+
+The following example commands are for the Globo.com dataset. For the Adressa dataset, you want to use [run_nar_preprocessing_adressa.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_preprocessing_adressa.sh) for pre-processing and [run_nar_train_adressa_local.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_train_adressa_local.sh) for training and evaluation.
 
 ### Pre-processing data for the NAR module
 The NAR module expects TFRecord files containing [SequenceExamples](https://www.tensorflow.org/api_docs/python/tf/train/SequenceExample) of user sessions's context and clicked articles.
 
-The following example command ([run_nar_preprocessing_gcom_dlrs.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_preprocessing_gcom_dlrs.sh)) takes the path of CSV files, containing users sessions split by hour (*input_clicks_csv_path_regex*), and outputs the corresponding TFRecord files.
+The following example command ([run_nar_preprocessing_gcom.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_preprocessing_gcom.sh)) takes the path of CSV files, containing users sessions split by hour (*input_clicks_csv_path_regex*), and outputs the corresponding TFRecord files.
 
 ```bash
 cd nar_module && \
 DATA_DIR="[REPLACE WITH THE PATH TO UNZIPPED GCOM DATASET FOLDER]" && \
-python3 -m nar.preprocessing.nar_preprocess_gcom_dlrs \
+python3 -m nar.preprocessing.nar_preprocess_gcom \
 --input_clicks_csv_path_regex "${DATA_DIR}/clicks/clicks_hour_*" \
 --output_sessions_tfrecords_path "${DATA_DIR}/sessions_tfrecords/sessions_hour_*.tfrecord.gz"
 ```
@@ -118,23 +147,26 @@ The *NAR* module is trained and evaluated according to the following *Temporal O
 1. Train the NAR module with sessions within the active hour.
 2. Evaluate the NAR module with sessions within the next hour, for the task of the next-click prediction.
 
-The following baseline methods (described in more detail in [1]) are also trained and evaluated in parallel, as benchmarks for CHAMELEON accuracy:
-- **Co-occurrent**
+The following baseline methods (described in more detail in [2]) are also trained and evaluated in parallel, as benchmarks for CHAMELEON accuracy:
+- **Co-occurrent (CO**
 - **Sequential Rules (SR)**
 - **Item-kNN**
 - **Vector Multiplication Session-Based kNN (V-SkNN)**
-- **Recently Popular**
-- **Content-Based**
+- **Recently Popular (RP)**
+- **Content-Based (CB)**
 
-The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N**.
+The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity [2].
 
 #### Parameters
 The *train_set_path_regex* parameter expects the path (local or GCS) where the sessions' TFRecords were exported. It also expects the path of the articles metadata CSV (*acr_module_articles_metadata_csv_path*) and the Pickle dump file with the *Article Content Embeddings* (*acr_module_articles_content_embeddings_pickle_path*).
 
 It is necessary to specify a subset of files (representing sessions started in the same hour) for training and evaluation (*train_files_from* to *train_files_up_to*). The frequency of evaluation is specified in *training_hours_for_each_eval* (e.g. *training_hours_for_each_eval=5* means that after training on 5 hour's (files) sessions, the next hour (file) is used for evaluation. 
 
-The *disable_eval_benchmarks* parameter disables training and evaluation of benchmark methods (useful for speed up). And the *save_eval_sessions_negative_samples* parameter saves a JSON lines file with the negative samples randomly sampled for each user session, for a consistent evaluation of the *GRU4Rec* benchmark (see next sections) which.
+To reproduce the experiments of [2], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
 
+To reproduce the experiments with the novelty regularization in loss function[2], change the parameter *novelty_reg_factor*.
+
+The *disable_eval_benchmarks* parameter disables training and evaluation of benchmark methods (useful for speed up). 
 
 The *NAR* module can either be trained locally or using GCP ML Engine, as following examples.  
 
@@ -148,12 +180,13 @@ JOB_PREFIX=gcom && \
 JOB_ID=`whoami`_${JOB_PREFIX}_`date '+%Y_%m_%d_%H%M%S'` && \
 MODEL_DIR='/tmp/chameleon/jobs/'${JOB_ID} && \
 echo 'Running training job and outputing to '${MODEL_DIR} && \
-python3 -m nar.nar_trainer_gcom_dlrs \
+python3 -m nar.nar_trainer_gcom \
 	--model_dir ${MODEL_DIR} \
 	--train_set_path_regex "${DATA_DIR}/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
 	--train_files_from 0 \
 	--train_files_up_to 72 \
 	--training_hours_for_each_eval 5 \
+	--save_results_each_n_evals 1 \
 	--acr_module_articles_metadata_csv_path ${DATA_DIR}/articles_metadata.csv \
 	--acr_module_articles_content_embeddings_pickle_path ${DATA_DIR}/articles_embeddings.pickle \
 	--batch_size 256 \
@@ -161,20 +194,25 @@ python3 -m nar.nar_trainer_gcom_dlrs \
 	--learning_rate 0.001 \
 	--dropout_keep_prob 1.0 \
 	--reg_l2 0.0001 \
-	--cosine_loss_gamma 5.0 \
-	--recent_clicks_buffer_size 2000 \
+	--softmax_temperature 0.2 \
+	--recent_clicks_buffer_hours 1.0 \
+	--recent_clicks_buffer_max_size 2000 \
+	--recent_clicks_for_normalization 2000 \
 	--eval_metrics_top_n 5 \
 	--CAR_embedding_size 1024 \
-	--rnn_units 255 \
+	--rnn_units 10 \
 	--rnn_num_layers 1 \
-	--train_total_negative_samples 7 \
-	--train_negative_samples_from_buffer 10 \
-	--eval_total_negative_samples 50 \
-	--eval_negative_samples_from_buffer 50 \
-	--eval_metrics_by_session_position \
-	--save_eval_sessions_negative_samples
+	--train_total_negative_samples 10 \
+	--train_negative_samples_from_buffer 200 \
+	--eval_total_negative_samples 10 \
+	--eval_negative_samples_from_buffer 200 \
+	--eval_negative_sample_relevance 0.02 \
+	--enabled_articles_input_features_groups "category" \
+	--enabled_clicks_input_features_groups "time,device,location,referrer" \
+	--enabled_internal_features "recency,novelty" \
+	--novelty_reg_factor 0.0
 ```
-> From [run_nar_train_gcom_dlrs_local.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_train_gcom_dlrs_local.sh)
+> From [run_nar_train_gcom_local.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_train_gcom_local.sh)
 
 #### ML Engine training and evaluation of NAR module
 When training the *NAR* module in GCP ML Engine, two parameters are specially important:
@@ -182,6 +220,7 @@ When training the *NAR* module in GCP ML Engine, two parameters are specially im
 - *save_results_each_n_evals* - The frequency (number of evaluation loops) in which TF logs saved locally are uploaded to a GCS path (*model_dir*).
 
 P.s. As the proposed *Temporal Offline Evaluation Method* assumes that hours are trained and evaluated in sequence, a single ML Engine worker with GPU is used (*scale-tier=basic-gpu*) to avoid leaking from future sessions (due to the asynchronous training when more than one worker is used).
+
 
 ```bash
 cd nar_module && \
@@ -194,7 +233,7 @@ JOBS_STAGING_DIR="[REPLACE BY A GCS PATH FOR STAGING. e.g. gs://mlengine_staging
 echo 'Running training job '${JOB_ID} && \
 gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--package-path nar \
-	--module-name nar.nar_trainer_gcom_dlrs \
+	--module-name nar.nar_trainer_gcom \
 	--staging-bucket ${JOBS_STAGING_DIR} \
 	--region us-central1 \
 	--python-version 3.5 \
@@ -206,55 +245,40 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--use_local_cache_model_dir \
 	--train_set_path_regex "${DATA_DIR}/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
 	--train_files_from 0 \
-	--train_files_up_to 72 \
+	--train_files_up_to 384 \
 	--training_hours_for_each_eval 5 \
-	--save_results_each_n_evals 3 \
+	--save_results_each_n_evals 1 \
 	--acr_module_articles_metadata_csv_path ${DATA_DIR}/articles_metadata.csv \
 	--acr_module_articles_content_embeddings_pickle_path ${DATA_DIR}/articles_embeddings.pickle \
 	--batch_size 256 \
 	--truncate_session_length 20 \
-	--learning_rate 0.001 \
+	--learning_rate 1e-4 \
 	--dropout_keep_prob 1.0 \
-	--reg_l2 0.0001 \
-	--cosine_loss_gamma 5.0 \
-	--recent_clicks_buffer_size 2000 \
-	--eval_metrics_top_n 5 \
+	--reg_l2 1e-5 \
+	--softmax_temperature 0.1 \
+	--recent_clicks_buffer_hours 1.0 \
+	--recent_clicks_buffer_max_size 20000 \
+	--recent_clicks_for_normalization 2000 \
+	--eval_metrics_top_n 10 \
 	--CAR_embedding_size 1024 \
 	--rnn_units 255 \
-	--rnn_num_layers 1 \
-	--train_total_negative_samples 7 \
-	--train_negative_samples_from_buffer 10 \
+	--rnn_num_layers 2 \
+	--train_total_negative_samples 50 \
+	--train_negative_samples_from_buffer 3000 \
 	--eval_total_negative_samples 50 \
-	--eval_negative_samples_from_buffer 50 \
-	--save_eval_sessions_negative_samples
+	--eval_negative_samples_from_buffer 3000 \
+	--eval_negative_sample_relevance 0.02 \
+	--enabled_articles_input_features_groups "category" \
+	--enabled_clicks_input_features_groups "time,device,location,referrer" \
+	--enabled_internal_features "item_clicked_embeddings,recency,novelty,article_content_embeddings" \
+	--novelty_reg_factor 0.0
 ```
-> [run_nar_train_gcom_dlrs_mlengine.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_train_gcom_dlrs_mlengine.sh)
+> [run_nar_train_gcom_mlengine.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_train_gcom_mlengine.sh)
 
-#### GRU4Rec benchmark - Training and evaluation
-The [GRU4Rec](https://github.com/hidasib/GRU4Rec) benchmark was originally developed by [2] in Theano. For this reason, its training and evaluation could not be run in parallel with CHAMELEON in GCP ML Engine.
-
-The GRU4Rec evaluation process was adapted to use the same protocol, metrics and negative samples, randomly sampled during NAR training.
-
-```bash
-cd nar_module && \
-DATA_DIR="[REPLACE WITH THE PATH TO UNZIPPED GCOM DATASET FOLDER]" && \
-time python3 -m  nar.benchmarks.gru4rec.run_gru4rec \
---train_set_path_regex "${DATA_DIR}/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
---eval_sessions_negative_samples_json_path "${DATA_DIR}/eval_sessions_negative_samples.json" \
---training_hours_for_each_eval 5 \
---eval_metrics_top_n 5 \
---batch_size 128 \
---n_epochs 1 \
---optimizer "adam" \
---dropout_p_hidden 0.0 \
---learning_rate 1e-4 \
---l2_lambda 1e-5 \
---momentum 0.0 \
---embedding 0
-```
-> From [run_gru4rec_gcom_dlrs.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_gru4rec_gcom_dlrs.sh)
 
 ## References
 [1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
 
-[2] Balázs Hidasi, Alexandros Karatzoglou, Linas Baltrunas, and Domonkos Tikk. 2016. Session-based recommendations with recurrent neural networks. In Proceedings of Forth International Conference on Learning Representations, 2016.
+[2] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:?, 49 pages
+
+[3] Balázs Hidasi, Alexandros Karatzoglou, Linas Baltrunas, and Domonkos Tikk. 2016. Session-based recommendations with recurrent neural networks. In Proceedings of Forth International Conference on Learning Representations, 2016.

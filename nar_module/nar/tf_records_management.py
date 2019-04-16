@@ -14,8 +14,10 @@ def make_sequential_feature(values, vtype=int):
         features = [tf.train.Feature(int64_list=tf.train.Int64List(value=[value])) for value in values]
     elif vtype == float:
         features = [tf.train.Feature(float_list=tf.train.FloatList(value=[value])) for value in values]
+    elif vtype == str:
+        features = [tf.train.Feature(bytes_list=tf.train.BytesList(value=[value.encode()])) for value in values]
     return tf.train.FeatureList(feature=features)
-    
+
 
 def save_rows_to_tf_record_file(rows, make_sequence_example_fn, export_filename):
     tf_record_options = tf_record.TFRecordOptions(tf_record.TFRecordCompressionType.GZIP)
