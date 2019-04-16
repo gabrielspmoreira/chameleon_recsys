@@ -7,7 +7,7 @@ Please cite as follows:
 > Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
 
 
-The version (v1.5) was released for reproducibility of the experiments reported in the following paper (pre-print) [2]. In that version, item coverage, novelty and diversity metrics are included, an optimized instantiation of CHAMELEON meta-architecture is implemented and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset).
+The version [v1.5](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.5) was released for reproducibility of the experiments reported in the following paper (pre-print) [2]. For that version, metrics like item coverage, novelty and diversity were included, an optimized instantiation of CHAMELEON meta-architecture was implemented and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset).
 
 > Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:?, 49 pages
 
@@ -17,15 +17,15 @@ This implementation depends on **Python 3** (with Pandas, Scikit-learn and SciPy
 The CHAMELEON modules training and evaluation can be performed either locally (GPU highly recommended) or using [Google Cloud Platform ML Engine](https://cloud.google.com/ml-engine/) managed service.
 
 ## Dataset for reproducibility
-The experiments of the paper *Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks* use the following datasets:
+The experiments reported in the paper *Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks* [2] use the following datasets:
 
-* [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in this [paper](https://doi.org/10.1145/3270323.3270328). With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. The dataset used in paper experiments was kindly shared by [Globo.com](http://globo.com) for this research.
+* [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in [1]. With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. This dataset used was kindly shared by [Globo.com](http://globo.com) for this research.
 
 * [SmartMedia Adressa dataset](http://reclab.idi.ntnu.no/dataset) - This dataset contains approximately 20
 million page visits from a Norwegian news portal [91]. In our experiments we used 16 days of the full dataset, which is available upon request, and includes article text and click events of about 2 million users and 13,000 articles.
 
  
-You must download these dataset to be able to run the commands to pre-process, train, and evaluate the CHAMELEON's NAR module, which provides next-click recommendation for user sessions.
+You must download these dataset to be able to run the commands to pre-process, train, and evaluate the session-based algorithms for next-click recommendation within user sessions.
 
 # CHAMELEON
 The objetive of the CHAMELEON is to provide accurate contextual session-based recommendations for news portals. It is composed of two complementary modules, with independent life cycles for training and inference: the *Article Content Representation (ACR)* and the *Next-Article Recommendation (NAR)* modules, as shown in Figure 1.
@@ -48,15 +48,19 @@ After training, the *Article Content Embeddings* for news articles (NumPy matrix
 
 ### Important notes about experiments with the ACR module
 
-It was not possible to share the articles' textual content for [Globo.com dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) due to licensing reasons. Although, it is not necessary to run the ACR module pre-processing and training commands (presented in the following subsections), since the trained Article Content Embeddings were already been provided with the Globo.com dataset.
+#### Globo.com dataset
+
+It was not possible to share the articles' textual content for [Globo.com dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) due to licensing reasons. Although, it is not necessary to run the ACR module pre-processing and training commands (presented in the following subsections), since the trained Article Content Embeddings were already been provided with the [dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom).
+
+#### Adressa dataset
 
 The creators of the [Adressa dataset](http://reclab.idi.ntnu.no/dataset) can make available the full textual content of articles upon request. After download their data, you must follow this steps:
 
-1. As Adressa is a large dataset, the 1st pre-processing step is performed using Spark. 
+1. As Adressa has provided a large dataset, the first pre-processing step is performed using Spark. 
 	1. Create a Spark cluster ([dataproc_preprocessing/create_cluster.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/create_cluster.sh)) on GCP Dataproc
 	2. Open a Jupyter session ([dataproc_preprocessing/browse_cluster.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/browse_cluster.sh))
-	3. Upload and run the preprocessing notebook ([dataproc_preprocessing/nar_preprocessing_addressa_01_dataproc.ipynb](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/nar_preprocessing_addressa_01_dataproc.ipynb))
-	4. Download the exported sessions JSON lines and the pickle with nar_encoders_dict to be used by the 2nd step of pre-processing
+	3. Upload the preprocessing notebook ([dataproc_preprocessing/nar_preprocessing_addressa_01_dataproc.ipynb](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/nar_preprocessing_addressa_01_dataproc.ipynb)), adjust the GCS path where the Adressa dataset was uploaded and run the notebook. 
+	4. Download the sessions JSON lines and the pickle with nar_encoders_dict, exported by the notebook, to be used by the 2nd step of pre-processing
 	5. Destroy the Spark cluster ([dataproc_preprocessing/destroy_cluster.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/dataproc_preprocessing/destroy_cluster.sh))
 
 2. Run the 2nd pre-processing step ([run_acr_preprocessing_adressa.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_preprocessing_adressa.sh)) 
@@ -64,9 +68,12 @@ The creators of the [Adressa dataset](http://reclab.idi.ntnu.no/dataset) can mak
 
 
 ### Pre-processing data for the ACR module
-Here is an example of the command for pre-processing articles text and metadata for the *ACR* module
+Here is an example of the command to pre-process articles text and metadata for the *ACR* module for Globo.com dataset.
 
-It allows to specify the path of a CSV containing articles text and metadata (*input_articles_csv_path*), the path of pre-trained word embeddings (*input_word_embeddings_path*) in [Gensim format](https://radimrehurek.com/gensim/models/word2vec.html) and exports articles data into TFRecords format into *output_tf_records_path*, including the dictionaries that mapped tokenized words to sequences of int (*output_word_vocab_embeddings_path*) and metadata the categorical features encoders (*output_label_encoders*). 
+It allows to specify the path of a CSV containing articles text and metadata (*input_articles_csv_path*), the path of pre-trained word embeddings and exports articles data into TFRecords format into *output_tf_records_path*, including the dictionaries that mapped tokenized words to sequences of int (*output_word_vocab_embeddings_path*) and metadata the categorical features encoders (*output_label_encoders*). 
+
+The word embeddings (*input_word_embeddings_path* parameter) must be in [Gensim format](https://radimrehurek.com/gensim/models/word2vec.html), either in binary or plain text format. For Globo.com dataset, we used pre-trained Portuguese word embeddings (skip-gram model (300 dimensions), available [here](http://nilc.icmc.usp.br/embeddings) and for Adressa dataset we used Norwegian word-embeddings (skip-gram model with 100 dimen-
+sions (model #100), available [here](http://vectors.nlpl.eu/repository)).
 
 ```bash
 cd acr_module && \
@@ -155,7 +162,7 @@ The following baseline methods (described in more detail in [2]) are also traine
 - **Recently Popular (RP)**
 - **Content-Based (CB)**
 
-The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity [2].
+The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity, described in [2].
 
 #### Parameters
 The *train_set_path_regex* parameter expects the path (local or GCS) where the sessions' TFRecords were exported. It also expects the path of the articles metadata CSV (*acr_module_articles_metadata_csv_path*) and the Pickle dump file with the *Article Content Embeddings* (*acr_module_articles_content_embeddings_pickle_path*).
@@ -164,7 +171,7 @@ It is necessary to specify a subset of files (representing sessions started in t
 
 To reproduce the experiments of [2], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
 
-To reproduce the experiments with the novelty regularization in loss function[2], change the parameter *novelty_reg_factor*.
+To reproduce the experiments reported in [2] with the novelty regularization in loss function, change the parameter *novelty_reg_factor*.
 
 The *disable_eval_benchmarks* parameter disables training and evaluation of benchmark methods (useful for speed up). 
 
