@@ -1,16 +1,9 @@
 # CHAMELEON - A Deep Learning Meta-Architecture for News Recommender Systems
 CHAMELEON is a Deep Learning Meta-Architecture for News Recommender Systems. It has being developed as part of the Doctoral research of Gabriel de Souza Pereira Moreira, at the Brazilian Aeronautics Institute of Technology ([ITA](http://www.ita.br/)).
 
-The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in the following paper (https://arxiv.org/abs/1808.00076) at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/) [1], co-located with ACM RecSys.   
-Please cite as follows:
+The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in a [paper](https://arxiv.org/abs/1808.00076) [1] published at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/), co-located with ACM RecSys.   
 
-> Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
-
-
-The version [v1.5](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.5) was released for reproducibility of the experiments reported in the following paper (pre-print) [2]. For that version, metrics like item coverage, novelty and diversity were included, an optimized instantiation of CHAMELEON meta-architecture was implemented and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset).
-
-> Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:?, 49 pages
-
+The version [v1.5](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.5) was released for reproducibility of the experiments reported in this paper ([arXiv pre-print](https://arxiv.org/pdf/1904.10367.pdf)) [2]. For that version, metrics like item coverage, novelty and diversity were included, an optimized instantiation of CHAMELEON meta-architecture was implemented and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset).
 
 This implementation depends on **Python 3** (with Pandas, Scikit-learn and SciPy modules) and **TensorFlow 1.12**. CHAMELEON modules were implemented using TF [Estimators](https://www.tensorflow.org/guide/estimators) and [Datasets](https://www.tensorflow.org/guide/datasets).
 
@@ -286,6 +279,6 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 ## References
 [1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
 
-[2] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:?, 49 pages
+[2] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:1904.10367, 49 pages.
 
 [3] Balázs Hidasi, Alexandros Karatzoglou, Linas Baltrunas, and Domonkos Tikk. 2016. Session-based recommendations with recurrent neural networks. In Proceedings of Forth International Conference on Learning Representations, 2016.
