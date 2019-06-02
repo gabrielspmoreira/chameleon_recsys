@@ -22,8 +22,9 @@ class ACR_Model:
 
             #Creating a tensor for class weights of each label
             labels_classes_weights = {}
-            for label_column_name in params['labels_class_weights']:
-                labels_classes_weights[label_column_name] = tf.constant(params['labels_class_weights'][label_column_name], tf.float32)
+            if 'labels_class_weights' in params:
+                for label_column_name in params['labels_class_weights']:
+                    labels_classes_weights[label_column_name] = tf.constant(params['labels_class_weights'][label_column_name], tf.float32)
 
             with tf.variable_scope("input_article_metadata"):
                 #If there is articles metadata available for the model
@@ -124,8 +125,8 @@ class ACR_Model:
                             
                             #If the label feature have classes weights, use the weights to deal with unbalanced classes
                             weights=tf.constant(1.0)
-                            if label_column_name in labels_classes_weights:
-                                weights=tf.gather(labels_classes_weights[label_column_name], labels[label_feature_name])
+                            if label_feature_name in labels_classes_weights:
+                                weights=tf.gather(labels_classes_weights[label_feature_name], labels[label_feature_name])
                                 
                             label_loss = tf.reduce_mean(tf.losses.sparse_softmax_cross_entropy(logits=labels_logits[label_feature_name], 
                                                                                            labels=labels[label_feature_name],
