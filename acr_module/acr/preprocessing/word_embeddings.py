@@ -20,9 +20,10 @@ def process_word_embedding_for_corpus_vocab(w2v_model, words_freq,
     new_embeddings_list = []
     new_vocab = {}
     last_token_id = RESERVED_TOKENS_IN_VOCAB
-    for word in w2v_model.wv.index2word:
-        
-        if word in most_freq_words:    
+    
+    w2v_vocab = set(w2v_model.wv.index2word)
+    for word in most_freq_words:        
+        if word in w2v_vocab:    
             new_vocab[word] = last_token_id
             last_token_id += 1
             new_embeddings_list.append(w2v_model[word])

@@ -35,7 +35,8 @@ python3 -m nar.nar_trainer_adressa \
 	--enabled_articles_input_features_groups "category,author" \
 	--enabled_clicks_input_features_groups "time,device,location,referrer" \
 	--enabled_internal_features "recency,novelty,article_content_embeddings,item_clicked_embeddings" \
-	--novelty_reg_factor 0.0
+	--novelty_reg_factor 0.0 \
+	--disable_eval_benchmarks
 
 #--rnn_units 255 \
 #--save_histograms

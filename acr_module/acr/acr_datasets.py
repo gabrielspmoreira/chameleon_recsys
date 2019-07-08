@@ -48,14 +48,14 @@ def expand_features(features, feature_to_expand):
     Hack. Because padded_batch doesn't play nice with scalres, so we expand the scalar to a vector of length 1
     '''
     for feature_key in feature_to_expand:
-        features[feature_key] = tf.expand_dims(tf.convert_to_tensor(features[feature_key]), 0)
+        features[feature_key] = tf.expand_dims(tf.convert_to_tensor(features[feature_key]), -1)
 
 def deflate_features(features, feature_to_deflate):
     '''
         Undo Hack. We undo the expansion we did in expand
     '''    
     for feature_key in feature_to_deflate:
-        features[feature_key] = tf.squeeze(features[feature_key])
+        features[feature_key] = tf.squeeze(features[feature_key], axis=[-1])
 
 def get_label_features(features, features_config):
     return {feature_name: features[feature_name] \

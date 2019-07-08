@@ -21,13 +21,13 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--use_local_cache_model_dir \
 	--train_set_path_regex  "${DATA_DIR}/data_transformed/sessions_tfrecords_by_hour/adressa_sessions_*.tfrecord.gz" \
 	--train_files_from 0 \
-	--train_files_up_to 380 \
+	--train_files_up_to 384 \
 	--training_hours_for_each_eval 5 \
 	--save_results_each_n_evals 1 \
 	--acr_module_resources_path ${DATA_DIR}/data_transformed/pickles/acr_articles_metadata_embeddings.pickle \
 	--nar_module_preprocessing_resources_path ${DATA_DIR}/data_transformed/pickles/nar_preprocessing_resources.pickle \
-	--batch_size 64 \
 	--truncate_session_length 20 \
+	--batch_size 64 \
 	--learning_rate 3e-4\
 	--dropout_keep_prob 1.0 \
 	--reg_l2 1e-4 \
@@ -44,13 +44,16 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--eval_total_negative_samples 50 \
 	--eval_negative_samples_from_buffer 5000 \
 	--eval_negative_sample_relevance 0.02 \
+	--content_embedding_scale_factor 2.0 \
 	--enabled_articles_input_features_groups "category,author" \
 	--enabled_clicks_input_features_groups "time,device,location,referrer" \
 	--enabled_internal_features "item_clicked_embeddings,recency,novelty,article_content_embeddings" \
-	--novelty_reg_factor 0.0
+	--novelty_reg_factor 0.0 \
+	--disable_eval_benchmarks
 	
 
 #--save_histograms
 #--save_eval_sessions_recommendations
 #--save_eval_sessions_negative_samples
 #--disable_eval_benchmarks
+#--eval_cold_start

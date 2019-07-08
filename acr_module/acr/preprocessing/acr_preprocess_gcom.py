@@ -187,7 +187,7 @@ def main():
                               domainid_encoder)
     
     print('Tokenizing articles...')
-    tokenized_articles = tokenize_articles(news_df['full_text'], clean_str)
+    tokenized_articles = tokenize_articles(news_df['full_text'])
 
     print('Computing word frequencies...')
     words_freq = get_words_freq(tokenized_articles)

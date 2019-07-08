@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJECT_ID="[REPLACE BY THE GCP PROJECT ID. e.g. 'chameleon-test']" && \
-DATA_DIR="[REPLACE BY THE GCS PATH OF GCOM ARTICLES DATASET e.g. gs://chameleon_datasets/gcom]" && \
+DATA_DIR="[REPLACE BY THE GCS PATH OF G1 ARTICLES DATASET e.g. gs://chameleon_datasets/gcom]" && \
 JOB_PREFIX=gcom_acr && \
 JOB_ID=`whoami`_${JOB_PREFIX}_`date '+%Y_%m_%d_%H%M%S'` && \
 MODEL_DIR="[REPLACE BY THE GCS PATH TO OUTPUT ACR MODEL RESULTS. e.g. gs://chameleon_jobs/gcom/acr_module/${JOB_ID}]" && \
@@ -28,7 +28,11 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--learning_rate 3e-4 \
 	--dropout_keep_prob 1.0 \
 	--l2_reg_lambda 7e-4 \
-	--text_feature_extractor "CNN" \
+	--text_feature_extractor "GRU" \
+	--training_task "metadata_classification" \
 	--cnn_filter_sizes "3,4,5" \
 	--cnn_num_filters 128 \
+	--rnn_units 512 \
+	--rnn_layers 1 \
+	--rnn_direction "unidirectional" \
 	--acr_embeddings_size 250
