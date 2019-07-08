@@ -19,7 +19,7 @@ from tensorflow.python.ops import math_ops
 
 from .metrics import HitRate, HitRateBySessionPosition, MRR, NDCG, ItemCoverage, PopularityBias, CategoryExpectedIntraListDiversity, Novelty, ExpectedRankSensitiveNovelty, ExpectedRankRelevanceSensitiveNovelty, ContentExpectedRankSensitiveIntraListDiversity, ContentExpectedRankRelativeSensitiveIntraListDiversity, ContentExpectedRankRelevanceSensitiveIntraListDiversity, ContentExpectedRankRelativeRelevanceSensitiveIntraListDiversity, ContentAverageIntraListDiversity, ContentMedianIntraListDiversity, ContentMinIntraListDiversity
 from .utils import merge_two_dicts, get_tf_dtype, hash_str_to_int, paired_permutations
-from .evaluation import update_metrics, compute_metrics_results
+from .evaluation import update_metrics, compute_metrics_results, ColdStartAnalysisState
 
 
 ARTICLE_REQ_FEATURES = ['article_id', 'created_at_ts']
@@ -127,7 +127,8 @@ class NARModuleModel():
                  internal_features_config={'recency': True,
                                            'novelty': True,
                                            'article_content_embeddings': True,
-                                           'item_clicked_embeddings': True}
+                                           'item_clicked_embeddings': True},
+                 eval_cold_start=False
                 ):        
         
         self.lr = lr 
@@ -163,6 +164,7 @@ class NARModuleModel():
         self.softmax_temperature = tf.constant(softmax_temperature, dtype=tf.float32, name='softmax_temperature')
 
         self.recent_clicks_for_normalization = recent_clicks_for_normalization
+        self.eval_cold_start = eval_cold_start
         
 
         with tf.variable_scope("article_content_embeddings"):
@@ -483,9 +485,17 @@ class NARModuleModel():
 
                     neg_items_prob = tf.nn.softmax(cos_sim_negative / self.softmax_temperature)
 
-                if mode == tf.estimator.ModeKeys.EVAL:
+
+                if self.eval_cold_start or (mode == tf.estimator.ModeKeys.EVAL):
+                    pos_neg_items_ids = tf.concat([tf.expand_dims(next_item_label, -1), batch_negative_items], 2)
+                    predicted_item_ids, predicted_item_probs = self.rank_items_by_predicted_prob(pos_neg_items_ids, items_prob)
+                    self.predicted_item_ids = predicted_item_ids
+                    self.predicted_item_probs = predicted_item_probs
+
+
+                if (mode == tf.estimator.ModeKeys.EVAL):
                     #Computing evaluation metrics
-                    self.define_eval_metrics(next_item_label, batch_negative_items, items_prob)
+                    self.define_eval_metrics(next_item_label, predicted_item_ids)
 
                 
                 
@@ -624,34 +634,31 @@ class NARModuleModel():
                 return None
 
 
+    def rank_items_by_predicted_prob(self, item_ids, items_prob):
+            
+        with tf.variable_scope("predicted_items"):
+ 
+            #Ranking item ids by their predicted probabilities
+            items_top_prob = tf.nn.top_k(items_prob,  k=tf.shape(items_prob)[2])
+            items_top_prob_indexes = items_top_prob.indices
+            predicted_item_probs = items_top_prob.values
+ 
+            items_top_prob_indexes_idx = tf.contrib.layers.dense_to_sparse(items_top_prob_indexes, eos_token=-1).indices
+            
+            items_top_prob_indexes_val = tf.gather_nd(items_top_prob_indexes, items_top_prob_indexes_idx)
+            #Takes the first two columns of the index and use sorted indices as the last column
+            items_top_prob_reordered_indexes = tf.concat([items_top_prob_indexes_idx[:,:2], 
+                                                          tf.expand_dims(tf.cast(items_top_prob_indexes_val, tf.int64), 1)], 1)
+            predicted_item_ids = tf.reshape(tf.gather_nd(item_ids, items_top_prob_reordered_indexes), 
+                                            tf.shape(item_ids))
+            return predicted_item_ids, predicted_item_probs
 
 
             
-    def define_eval_metrics(self, next_item_label, batch_negative_items, items_prob):
-        with tf.variable_scope("evaluation_metrics"):
-            
-            with tf.variable_scope("predicted_items"):
+    def define_eval_metrics(self, next_item_label, predicted_item_ids):
+        with tf.variable_scope("evaluation_metrics"):                    
 
-                next_item_label_expanded = tf.expand_dims(next_item_label, -1)
-                
-                pos_neg_items_concat = tf.concat([next_item_label_expanded, batch_negative_items], 2)
-
-                #Predicting item ids from [positive + k negative samples]
-                items_top_prob = tf.nn.top_k(items_prob,  k=tf.shape(items_prob)[2])
-                items_top_prob_indexes = items_top_prob.indices
-                self.items_top_prob_values = items_top_prob.values
-
-                items_top_prob_indexes_idx = tf.contrib.layers.dense_to_sparse(items_top_prob_indexes, eos_token=-1).indices
-                
-                items_top_prob_indexes_val = tf.gather_nd(items_top_prob_indexes, items_top_prob_indexes_idx)
-                #Takes the first two columns of the index and use sorted indices as the last column
-                items_top_prob_reordered_indexes = tf.concat([items_top_prob_indexes_idx[:,:2], 
-                                                              tf.expand_dims(tf.cast(items_top_prob_indexes_val, tf.int64), 1)], 1)
-                predicted_item_ids = tf.reshape(tf.gather_nd(pos_neg_items_concat, items_top_prob_reordered_indexes), 
-                                                tf.shape(pos_neg_items_concat))
-                self.predicted_item_ids = predicted_item_ids
-
-
+            next_item_label_expanded = tf.expand_dims(next_item_label, -1)
 
             #Computing Recall@N
             self.recall_at_n, self.recall_at_n_update_op = tf.contrib.metrics.sparse_recall_at_top_k(
@@ -1210,22 +1217,31 @@ class ClickedItemsState:
 
         #State shared by ItemCooccurrenceRecommender and ItemKNNRecommender
         self.items_coocurrences = csr_matrix((self.num_items, self.num_items), dtype=np.int64)    
+
+        #States specific for benchmarks
+        self.benchmarks_states = dict()
+
         #Stores the timestamp of the first click in the item
         self.items_first_click_ts = dict()
         #Stores the delay (in minutes) from item's first click to item's first recommendation from CHAMELEON
         self.items_delay_for_first_recommendation = dict()
-        #States specific for benchmarks
-        self.benchmarks_states = dict()
+
+        self.current_step = 0
+        self.items_first_click_step = dict()
+        self.cold_start_state = ColdStartAnalysisState()
+        
 
         
     def save_state_checkpoint(self):
         self.articles_pop_chkp = np.copy(self.articles_pop)
         self.pop_recent_clicks_buffer_chkp = np.copy(self.pop_recent_clicks_buffer)
         self.items_coocurrences_chkp = csr_matrix.copy(self.items_coocurrences)
-        #self.items_coocurrences_chkp = lil_matrix.copy(self.items_coocurrences)
+        self.benchmarks_states_chkp = deepcopy(self.benchmarks_states)
         self.items_first_click_ts_chkp = deepcopy(self.items_first_click_ts)
         self.items_delay_for_first_recommendation_chkp = deepcopy(self.items_delay_for_first_recommendation)
-        self.benchmarks_states_chkp = deepcopy(self.benchmarks_states)
+        self.items_first_click_step_chkp = deepcopy(self.items_first_click_step) 
+        self.cold_start_state_chkp = deepcopy(self.cold_start_state)
+        self.current_step_chkp = self.current_step
         
     def restore_state_checkpoint(self):
         self.articles_pop = self.articles_pop_chkp
@@ -1240,6 +1256,12 @@ class ClickedItemsState:
         del self.items_delay_for_first_recommendation_chkp
         self.benchmarks_states = self.benchmarks_states_chkp
         del self.benchmarks_states_chkp
+
+        self.items_first_click_step = self.items_first_click_step_chkp
+        del self.items_first_click_step_chkp
+        self.cold_start_state = self.cold_start_state_chkp
+        del self.cold_start_state_chkp
+        self.current_step = self.current_step_chkp
         
     def get_articles_pop(self):
         return self.articles_pop
@@ -1258,6 +1280,16 @@ class ClickedItemsState:
         return self.items_coocurrences
 
 
+    def increment_current_step(self):
+        self.current_step += 1        
+ 
+    def get_current_step(self):
+        return self.current_step
+ 
+    def get_cold_start_state(self):
+        return self.cold_start_state
+
+
     def update_items_first_click_ts(self, batch_clicked_items, batch_clicked_timestamps):
 
         batch_item_ids = batch_clicked_items.reshape(-1)
@@ -1272,74 +1304,23 @@ class ClickedItemsState:
                 self.items_first_click_ts[item_id] = click_ts
 
 
-    def update_items_delay_for_first_recommendation(self, batch_rec_items, batch_click_timestamps, topn):
-        batch_top_rec_ids = batch_rec_items[:,:,:topn]
-
-        #Repeating last dimension of click timestamp to the number of recommendations, to make matrices compatible
-        batch_rec_timestamp = np.tile(batch_click_timestamps, (1,1,topn))
-
-        batch_top_rec_ids = batch_top_rec_ids.reshape(-1)
-        batch_rec_timestamp = batch_rec_timestamp.reshape(-1)
-
-        sorted_item_recs = list(sorted(zip(batch_rec_timestamp, batch_top_rec_ids)))
-
-        neg_delay = 0
-        valid_delay = 0
-        for rec_ts, item_id in sorted_item_recs:
-            #Ignoring padded items
-            if rec_ts != 0 and item_id != 0:
-                if item_id in self.items_first_click_ts:
-                    delay_minutes = (rec_ts - self.items_first_click_ts[item_id]) / (1000. * 60.)
-
-                    if delay_minutes > 0 and \
-                        (not item_id in self.items_delay_for_first_recommendation or \
-                         delay_minutes < self.items_delay_for_first_recommendation[item_id]):
-
-                        #tf.logging.info('rec_ts: {}, items_first_click_ts: {}, delay: {}'.format(rec_ts, self.items_first_click_ts[item_id], delay))
-                        self.items_delay_for_first_recommendation[item_id] = delay_minutes
-                #else:
-                #    tf.logging.warn('Item {} not found in clicked items'.format(item_id))
-
-
-    def log_stats_time_for_first_rec(self):
-        #tf.logging.info('log_stats_time_for_first_rec: {}'.format(len(self.items_delay_for_first_recommendation)))
-        if len(self.items_delay_for_first_recommendation) > 0:
-            values = np.array(list(self.items_delay_for_first_recommendation.values()))
-            stats = {'min': np.min(values),
-                    '10%': np.percentile(values, 10),
-                    '25%': np.percentile(values, 25),
-                    '50%': np.percentile(values, 50),
-                    '75%': np.percentile(values, 75),
-                    '90%': np.percentile(values, 90),
-                    'max': np.max(values),
-                    'mean': np.mean(values),
-                    'std': np.std(values)
-                     }
-
-            tf.logging.info('Stats on delay for first recommendation since first click: {}'.format(stats))
-
-
-            #Crossing popularity with time for first rec
-            items_pop_time_for_first_rec = []
-            for item_id in self.items_delay_for_first_recommendation.keys():
-                time_for_first_rec = self.items_delay_for_first_recommendation[item_id]
-                item_pop = self.articles_pop[item_id]
-                items_pop_time_for_first_rec.append((item_pop, time_for_first_rec))
-
-            items_pop_time_for_first_rec_df = pd.DataFrame(items_pop_time_for_first_rec, columns=['pop', 'time_to_rec'])
-            #Binning popularity
-            items_pop_time_for_first_rec_df['pop_deciles_binned'] = pd.qcut(items_pop_time_for_first_rec_df['pop'], 10, duplicates='drop')
-            time_to_rec_by_popularity_df = items_pop_time_for_first_rec_df.groupby('pop_deciles_binned')['time_to_rec'].agg(['median', 'mean', 'std'])
-
-            tf.logging.info('Stats on delay for first recommendation since first click (BY POPULARITY): {}'.format(time_to_rec_by_popularity_df))
-    
     def update_items_state(self, batch_clicked_items, batch_clicked_timestamps):
         #batch_items_nonzero = self._get_non_zero_items_vector(batch_clicked_items)
 
         self._update_recently_clicked_items_buffer(batch_clicked_items, batch_clicked_timestamps)
         self._update_recent_pop_items()
 
-        self._update_pop_items(batch_clicked_items)        
+        self._update_pop_items(batch_clicked_items)  
+
+
+    def update_items_first_click_step(self, batch_clicked_items):        
+        
+        #Getting the unique clicked items in the batch
+        batch_clicked_items_set = set(batch_clicked_items).difference(set([0]))
+ 
+        for item_id in batch_clicked_items_set:
+            if item_id not in self.items_first_click_step:
+                self.items_first_click_step[item_id] = self.get_current_step()      
             
     
     def _update_recently_clicked_items_buffer(self, batch_clicked_items, batch_clicked_timestamps):
@@ -1404,11 +1385,13 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
                  articles_metadata,
                  eval_negative_sample_relevance,
                  eval_benchmark_classifiers=[],
-                 eval_metrics_by_session_position=False):
+                 eval_metrics_by_session_position=False,
+                 eval_cold_start=False):
 
         self.mode = mode
         self.model = model        
         self.eval_metrics_top_n = eval_metrics_top_n
+        self.eval_cold_start = eval_cold_start
                 
         self.clicked_items_state = clicked_items_state
         self.eval_sessions_metrics_log = eval_sessions_metrics_log
@@ -1465,8 +1448,9 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
                    'user_id': self.model.user_id,
                    }
 
-        #Commenting to improve performance during training
-        #fetches['predicted_item_ids'] = self.model.predicted_item_ids
+        if self.eval_cold_start or (self.mode == tf.estimator.ModeKeys.EVAL):
+            fetches['predicted_item_ids'] = self.model.predicted_item_ids
+            fetches['eval_batch_negative_items'] = self.model.batch_negative_items
 
         if self.mode == tf.estimator.ModeKeys.EVAL:
             fetches['eval_batch_negative_items'] = self.model.batch_negative_items
@@ -1477,8 +1461,7 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
             fetches['mrr_at_n'] = self.model.mrr_update_op
             #fetches['ndcg_at_n'] = self.model.ndcg_at_n_mean_update_op
             
-            fetches['predicted_item_ids'] = self.model.predicted_item_ids
-            fetches['predicted_item_probs'] = self.model.items_top_prob_values
+            fetches['predicted_item_probs'] = self.model.predicted_item_probs
         
         feed_dict = {
             self.model.articles_recent_pop_norm: self.clicked_items_state.get_articles_recent_pop_norm(),            
@@ -1501,6 +1484,30 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
                                    eval_negative_items=eval_negative_items)
         self.eval_streaming_metrics_last = merge_two_dicts(self.eval_streaming_metrics_last, clf_metrics)
 
+
+    def update_items_cold_start_state(self, users_ids, clicked_items, next_item_labels, eval_batch_negative_items,
+                                        predicted_item_ids):
+ 
+        clicked_items_nonzero = set(clicked_items.reshape(-1)).union(set(next_item_labels.reshape(-1))).difference(set([0]))
+ 
+        #Increments the current training/eval step
+        self.clicked_items_state.increment_current_step()
+        #Updating the step where items were clicked the first time
+        self.clicked_items_state.update_items_first_click_step(clicked_items_nonzero)
+        #Computing number of steps before the first top-n recommendation
+        predicted_top_item_ids = predicted_item_ids[:, :, :self.eval_metrics_top_n]
+        self.clicked_items_state.get_cold_start_state().update_items_num_steps_before_first_rec(predicted_top_item_ids, 
+                                                                    self.clicked_items_state.items_first_click_step,
+                                                                    self.clicked_items_state.get_current_step())
+ 
+        #For each benchmark, computes number of steps before the first top-n recommendation
+        for clf in self.bench_classifiers:
+            valid_candidate_items = clf.get_valid_candidate_items(next_item_labels, eval_batch_negative_items)
+            bench_preds = clf.predict(users_ids, clicked_items, valid_items=valid_candidate_items, topk=self.eval_metrics_top_n)
+            clf.get_cold_start_state().update_items_num_steps_before_first_rec(bench_preds, 
+                                                                self.clicked_items_state.items_first_click_step,
+                                                                self.clicked_items_state.get_current_step())
+
     #Runs after every batch
     def after_run(self, run_context, run_values):     
         clicked_items = run_values.results['clicked_items']
@@ -1510,6 +1517,11 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
 
         users_ids = run_values.results['user_id']
         sessions_ids = run_values.results['session_id']
+
+        if self.eval_cold_start or (self.mode == tf.estimator.ModeKeys.EVAL):
+            predicted_item_ids = run_values.results['predicted_item_ids']
+            #tf.logging.info('predicted_item_ids (shape): {}'.format(predicted_item_ids.shape))  
+            eval_batch_negative_items = run_values.results['eval_batch_negative_items'] 
 
                 
         if self.mode == tf.estimator.ModeKeys.EVAL:
@@ -1614,6 +1626,14 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
 
             tf.logging.info('Finished benchmarks evaluation')
 
+
+        if self.eval_cold_start:
+            #Updates information related to the item cold-start analysis (step of first click, # steps to the first recommendation)
+            #Ps. As it predicts with the benchmarks, it is necessary to this before training the benchmark with this batch
+            self.update_items_cold_start_state(users_ids, clicked_items, next_item_labels, eval_batch_negative_items,
+                                                predicted_item_ids)
+
+
         #Training benchmark classifier
         for clf in self.bench_classifiers:
             #It is required that session_ids are sorted by time (ex: first_timestamp+hash_session_id), so that
@@ -1638,6 +1658,12 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
         self.clicked_items_state.update_items_state(batch_clicked_items_nonzero, batch_clicked_timestamps_nonzero)        
         self.clicked_items_state.update_items_coocurrences(batch_clicked_items)
  
+
+    def add_cold_start_stats(self, eval_metrics):
+        PREFIX = 'coldstart_'
+        eval_metrics[PREFIX+'chameleon'] = self.clicked_items_state.cold_start_state.get_statistics()
+        for clf in self.bench_classifiers:
+            eval_metrics[PREFIX+clf.get_clf_suffix()] = clf.get_cold_start_state().get_statistics()
     
     def end(self, session=None):
         if self.mode == tf.estimator.ModeKeys.EVAL:    
@@ -1649,13 +1675,13 @@ class ItemsStateUpdaterHook(tf.train.SessionRunHook):
 
             sessions_count = np.sum([x['batch_sessions_count'] for x in self.stats_logs])
             self.eval_streaming_metrics_last['sessions_count'] = sessions_count
+
+            if self.eval_cold_start:
+                self.add_cold_start_stats(self.eval_streaming_metrics_last)
                         
             self.eval_sessions_metrics_log.append(self.eval_streaming_metrics_last)
             eval_metrics_str = '\n'.join(["'{}':\t{}".format(metric, value) for metric, value in sorted(self.eval_streaming_metrics_last.items())])
             tf.logging.info("Evaluation metrics: [{}]".format(eval_metrics_str))
-            
-            #Logs stats for time delay for the first item recommendation since its first click
-            self.clicked_items_state.log_stats_time_for_first_rec()
 
             tf.logging.info("Restoring items state checkpoint from train")
             #Restoring the original state of items popularity and recency state from train loop

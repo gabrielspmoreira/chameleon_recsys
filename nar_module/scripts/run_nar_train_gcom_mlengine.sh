@@ -44,12 +44,15 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--eval_total_negative_samples 50 \
 	--eval_negative_samples_from_buffer 3000 \
 	--eval_negative_sample_relevance 0.02 \
+	--content_embedding_scale_factor 6.0 \
 	--enabled_articles_input_features_groups "category" \
 	--enabled_clicks_input_features_groups "time,device,location,referrer" \
-	--enabled_internal_features "item_clicked_embeddings,recency,novelty,article_content_embeddings" \
-	--novelty_reg_factor 0.0
+	--enabled_internal_features "recency,novelty,article_content_embeddings,item_clicked_embeddings" \
+	--novelty_reg_factor 0.0 \
+	--disable_eval_benchmarks
 
 #--save_histograms
 #--save_eval_sessions_recommendations
 #--save_eval_sessions_negative_samples
 #--disable_eval_benchmarks
+#--eval_cold_start

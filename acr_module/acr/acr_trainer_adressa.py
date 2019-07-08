@@ -34,8 +34,18 @@ tf.flags.DEFINE_string('output_acr_metadata_embeddings_path', default='',
 
 #Model params
 tf.flags.DEFINE_string('text_feature_extractor', default="CNN", help='Feature extractor of articles text: CNN or RNN')
+tf.flags.DEFINE_string('training_task', default="metadata_classification", help='Training task: (metadata_classification | autoencoder)')
+tf.flags.DEFINE_float('autoencoder_noise', default=0.0, help='Adds white noise with this standard deviation to the input word embeddings')
+
+
 tf.flags.DEFINE_string('cnn_filter_sizes', default="3,4,5", help='CNN layers filter sizes (sliding window over words)')
 tf.flags.DEFINE_integer('cnn_num_filters', default=128, help='Number of filters of CNN layers')
+
+tf.flags.DEFINE_integer('rnn_units', default=250, help='Number of units in each RNN layer')
+tf.flags.DEFINE_integer('rnn_layers', default=1, help='Number of RNN layers')
+tf.flags.DEFINE_string('rnn_direction', default='unidirectional', help='Direction of RNN layers: (unidirectional | bidirectional)')
+
+
 tf.flags.DEFINE_integer('acr_embeddings_size', default=250, help='Embedding size of output ACR embeddings')
 
 
@@ -118,6 +128,7 @@ def acr_model_fn(features, labels, mode, params):
     persons_column   = create_multihot_feature(features, 'persons', params['features_config']) 
 
     metadata_input_feature_columns = [concepts_column, entities_column, locations_column, persons_column]
+    
     metadata_input_features = {'concepts': features['concepts'],
                                'entities': features['entities'],
                                'locations': features['locations'],
@@ -125,10 +136,10 @@ def acr_model_fn(features, labels, mode, params):
 
     
     
-    acr_model = ACR_Model(params['text_feature_extractor'], features, 
-                    metadata_input_features, metadata_input_feature_columns, 
-                    labels, params['features_config']['label_features'],
-                    mode, params)   
+    acr_model = ACR_Model(params['training_task'], params['text_feature_extractor'], features, metadata_input_features, 
+                        metadata_input_feature_columns, 
+                         labels, params['features_config']['label_features'],
+                         mode, params)  
     
     loss = None
     if (mode == tf.estimator.ModeKeys.TRAIN or
@@ -163,10 +174,17 @@ def acr_model_fn(features, labels, mode, params):
                        'persons': features['persons'],
                        'created_at_ts': features['created_at_ts'],
                        'text_length': features['text_length'],
+                       'input_text': features['text']
                        }            
 
-        for feature_name in acr_model.labels_predictions:
-            predictions["{}{}".format(PREDICTIONS_PREFIX, feature_name)] = acr_model.labels_predictions[feature_name]
+
+        if params['training_task'] == 'autoencoder':
+            #predictions['input_text'] = features['text']
+            predictions['predicted_word_ids'] = acr_model.predicted_word_ids
+        elif params['training_task'] == 'metadata_classification':
+            #Saves predicted categories
+            for feature_name in acr_model.labels_predictions:
+                predictions["{}{}".format(PREDICTIONS_PREFIX, feature_name)] = acr_model.labels_predictions[feature_name]
 
         #prediction_hooks = [ACREmbeddingExtractorHook(mode, acr_model)]  
         
@@ -189,26 +207,27 @@ def acr_model_fn(features, labels, mode, params):
               #prediction_hooks=prediction_hooks,
               )
 
-def build_acr_estimator(model_output_dir, word_embeddings_matrix, features_config, labels_class_weights):
+def build_acr_estimator(model_output_dir, word_embeddings_matrix, features_config, labels_class_weights, special_token_embedding_vector):
 
 
-    def word_embeddings_initializer(shape=None, dtype=tf.float32, partition_info=None):
-        assert dtype is tf.float32
-        return word_embeddings_matrix
-
-    params = {#'embedding_initializer': tf.random_uniform_initializer(-1.0, 1.0),
+    params = {'training_task': FLAGS.training_task,
               'text_feature_extractor': FLAGS.text_feature_extractor,  
-              'embedding_initializer': word_embeddings_initializer,              
+              'word_embeddings_matrix': word_embeddings_matrix,          
               'vocab_size': word_embeddings_matrix.shape[0],
               'word_embedding_size': word_embeddings_matrix.shape[1],
               'cnn_filter_sizes': FLAGS.cnn_filter_sizes,
               'cnn_num_filters': FLAGS.cnn_num_filters,
+              'rnn_units': FLAGS.rnn_units,
+              'rnn_layers': FLAGS.rnn_layers,
+              'rnn_direction': FLAGS.rnn_direction,
               'dropout_keep_prob': FLAGS.dropout_keep_prob,
               'l2_reg_lambda': FLAGS.l2_reg_lambda,
               'learning_rate': FLAGS.learning_rate,
               'acr_embeddings_size': FLAGS.acr_embeddings_size,
               'features_config': features_config,
               'labels_class_weights': labels_class_weights,
+              'special_token_embedding_vector': special_token_embedding_vector,
+              'autoencoder_noise': FLAGS.autoencoder_noise,
               'enable_profiler_hook': False
               }
 
@@ -247,16 +266,10 @@ def get_articles_metadata_embeddings(article_metadata_with_pred_embeddings):
 
     content_article_embeddings = np.vstack(articles_metadata_df['acr_embedding'].values)
     
-
-    #Standardizing the Article Content Embeddings for Adressa dataset, and scaling to get maximum and minimum values around [-6,5], instead of [-40,30] after standardization, to mimic the doc2vec distribution for higher accuracy in NAR module
-    scaler = StandardScaler()
-    content_article_embeddings_standardized = scaler.fit_transform(content_article_embeddings)
-    content_article_embeddings_standardized_scaled = content_article_embeddings_standardized / 5.0
-
     
     #Creating and embedding for the padding article    
-    embedding_for_padding_article = np.mean(content_article_embeddings_standardized_scaled, axis=0)
-    content_article_embeddings_with_padding = np.vstack([embedding_for_padding_article, content_article_embeddings_standardized_scaled])
+    embedding_for_padding_article = np.mean(content_article_embeddings, axis=0)
+    content_article_embeddings_with_padding = np.vstack([embedding_for_padding_article, content_article_embeddings])
 
     #Checking if content articles embedding size correspond to the last article_id
     assert content_article_embeddings_with_padding.shape[0] == articles_metadata_df['article_id'].tail(1).values[0]+1
@@ -268,12 +281,18 @@ def get_articles_metadata_embeddings(article_metadata_with_pred_embeddings):
                                                             .apply(lambda x: x.nonzero()[0])
 
 
+    cols_to_export = ['article_id', 'category0', 'category1', 
+                       'author', 'keywords', 'concepts', 'entities', 'locations', 'persons',
+                       'created_at_ts', 'text_length', 'input_text']
+    if FLAGS.training_task == 'autoencoder': 
+        cols_to_export.extend(['predicted_word_ids'])
+    elif FLAGS.training_task == 'metadata_classification': 
+        #Adding predictions columns for debug
+        cols_to_export.extend([col for col in articles_metadata_df.columns if col.startswith(PREDICTIONS_PREFIX)])
+
+
     #Filtering metadata columns to export
-    articles_metadata_df = articles_metadata_df[['article_id', 'category0', 'category1', 
-                                                 'author', 'keywords', 'concepts', 'entities', 'locations', 'persons',
-                                                 'created_at_ts', 'text_length'] + \
-                                                 list([column_name for column_name in articles_metadata_df.columns \
-                                                       if column_name.startswith(PREDICTIONS_PREFIX)])] #Adding predictions columns for debug
+    articles_metadata_df = articles_metadata_df[cols_to_export]
 
     return articles_metadata_df, content_article_embeddings_with_padding
 
@@ -314,10 +333,16 @@ def main(unused_argv):
         input_tfrecords = FLAGS.train_set_path_regex
         tf.logging.info('Defining input data (TFRecords): {}'.format(input_tfrecords))
 
+
+        #Creating an ambedding for a special token to initiate decoding of RNN-autoencoder
+        special_token_embedding_vector = np.random.uniform(low=-0.04, high=0.04, 
+                                                 size=[1,word_embeddings_matrix.shape[1]])
+
         acr_model = build_acr_estimator(model_output_dir, 
                                             word_embeddings_matrix, 
                                             features_config,
-                                            labels_class_weights)
+                                            labels_class_weights,
+                                            special_token_embedding_vector)
 
 
         

@@ -1,5 +1,5 @@
 #!/bin/bash
-DATA_DIR="[REPLACE BY THE GCOM ARTICLES DATASET PATH]" && \
+DATA_DIR="[REPLACE BY THE G1 ARTICLES DATASET PATH]" && \
 python3 -m acr.preprocessing.acr_preprocess_gcom \
 	--input_articles_csv_path ${DATA_DIR}/document_g1/documents_g1.csv \
  	--input_word_embeddings_path ${DATA_DIR}/word2vec/skip_s300.txt \

@@ -12,12 +12,16 @@ python3 -m acr.acr_trainer_adressa \
 	--input_label_encoders_path ${DATA_DIR}/pickles/acr_label_encoders.pickle \
 	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings.pickle \
 	--batch_size 128 \
-	--truncate_tokens_length 1000 \
-	--training_epochs 30 \
+	--truncate_tokens_length 300 \
+	--training_epochs 5 \
 	--learning_rate 3e-4 \
 	--dropout_keep_prob 1.0 \
 	--l2_reg_lambda 1e-5 \
 	--text_feature_extractor "CNN" \
+	--training_task "metadata_classification" \
 	--cnn_filter_sizes "3,4,5" \
 	--cnn_num_filters 128 \
+	--rnn_units 512 \
+	--rnn_layers 1 \
+	--rnn_direction "unidirectional" \
 	--acr_embeddings_size 250

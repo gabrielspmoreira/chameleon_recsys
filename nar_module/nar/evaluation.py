@@ -41,3 +41,42 @@ def compute_metrics_results(streaming_metrics, recommender=''):
             results['{}_{}'.format(metric.name, recommender)] = result
 
     return results
+
+class ColdStartAnalysisState():
+ 
+    def __init__(self):
+        self.items_num_steps_before_first_rec = dict()
+ 
+    def update_items_num_steps_before_first_rec(self, batch_rec_items, items_first_click_step, step):
+        batch_top_rec_ids_flatten = batch_rec_items.reshape(-1)
+        batch_top_rec_ids_nonzero = batch_top_rec_ids_flatten[np.nonzero(batch_top_rec_ids_flatten)]
+        batch_top_rec_ids_set = set(batch_top_rec_ids_nonzero)
+ 
+        for item_id in batch_top_rec_ids_set:
+            if item_id in items_first_click_step and \
+               item_id not in self.items_num_steps_before_first_rec:
+                elapsed_steps = step - items_first_click_step[item_id]
+                assert elapsed_steps >= 0
+                self.items_num_steps_before_first_rec[item_id] = elapsed_steps
+ 
+ 
+    def get_statistics(self):
+        if len(self.items_num_steps_before_first_rec) > 0:
+            values = np.array(list(self.items_num_steps_before_first_rec.values()))
+            stats = {'min': np.min(values),
+                    '01%': np.percentile(values, 1),
+                    '10%': np.percentile(values, 10),
+                    '25%': np.percentile(values, 25),
+                    '50%': np.percentile(values, 50),
+                    '75%': np.percentile(values, 75),
+                    '90%': np.percentile(values, 90),
+                    '99%': np.percentile(values, 99),
+                    'max': np.max(values),
+                    'mean': np.mean(values),
+                    'std': np.std(values),
+                    'count': len(values)
+                     }
+        else:
+            stats = {'count': 0}
+ 
+        return stats

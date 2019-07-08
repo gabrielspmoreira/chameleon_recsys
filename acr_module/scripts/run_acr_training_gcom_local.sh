@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DATA_DIR="[REPLACE BY THE GCOM ARTICLES DATASET PATH]" && \
+DATA_DIR="[REPLACE BY THE G1 ARTICLES DATASET PATH]" && \
 JOB_PREFIX=gcom && \
 JOB_ID=`whoami`_${JOB_PREFIX}_`date '+%Y_%m_%d_%H%M%S'` && \
 MODEL_DIR='/tmp/chameleon/gcom/jobs/'${JOB_ID} && \
@@ -18,6 +18,7 @@ python3 -m acr.acr_trainer_gcom \
 	--dropout_keep_prob 1.0 \
 	--l2_reg_lambda 7e-4 \
 	--text_feature_extractor "CNN" \
+	--training_task "metadata_classification" \
 	--cnn_filter_sizes "3,4,5" \
 	--cnn_num_filters 128 \
 	--acr_embeddings_size 250

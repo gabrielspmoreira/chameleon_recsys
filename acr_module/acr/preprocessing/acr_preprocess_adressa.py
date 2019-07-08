@@ -299,11 +299,20 @@ def process_cat_features(news_df):
     return cat_features_encoders, labels_class_weights
 
 
-def tokenize_norwegian_article(text):
+def tokenize_norwegian_article(text, first_sentences=12, max_words_length=1000):
+    #Removing pipes for correct sentence tokenization
+    text = text.replace('|', '.')
     words_tokenized = []
-    for sentence in nltk.tokenize.sent_tokenize(text, language='norwegian'):
-        words_tokenized.extend(nltk.tokenize.word_tokenize(sentence, language='norwegian'))        
-    return words_tokenized[:args.max_words_length] #Truncating to the maximum number of tokens
+    sent_count = 0
+    for sentence in nltk.tokenize.sent_tokenize(text, language='norwegian'):        
+        sent_tokenized = nltk.tokenize.word_tokenize(sentence, language='norwegian')
+        if len(sent_tokenized) >= 3 and sent_tokenized[-1] in ['.', '!', '?', ';'] and \
+           sent_tokenized != ['Saken', 'oppdateres', '.']:                
+            sent_count += 1
+            words_tokenized.extend(sent_tokenized)        
+            if sent_count == first_sentences:
+                break
+    return words_tokenized[:args.max_words_length]
 
 
 def save_article_cat_encoders(output_path, cat_features_encoders, labels_class_weights):

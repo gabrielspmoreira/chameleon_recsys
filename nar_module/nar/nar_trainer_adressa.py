@@ -17,6 +17,8 @@ import tempfile
 import sys
 import logging
 
+from sklearn.preprocessing import Normalizer
+
 from .utils import deserialize, resolve_files, chunks, merge_two_dicts, log_elapsed_time, append_lines_to_text_file, min_max_scale
 from .datasets import prepare_dataset_iterator
 from .nar_model import ClickedItemsState, ItemsStateUpdaterHook, NARModuleModel
@@ -57,6 +59,7 @@ tf.flags.DEFINE_bool('eval_metrics_by_session_position', default=False, help='Co
 tf.flags.DEFINE_float('novelty_reg_factor', default=0.0, help='Popularity Regularization Loss (e.g. 0.1, 0.2, 0.3)')
 tf.flags.DEFINE_float('diversity_reg_factor', default=0.0, help='Diversity (similarity) Regularization Loss (e.g. 0.1, 0.2, 0.3)')
 tf.flags.DEFINE_float('eval_negative_sample_relevance', default=0.1, help='Relevance of negative samples within top-n recommended items for evaluation (relevance of positive sample is always 1.0)')
+tf.flags.DEFINE_float('content_embedding_scale_factor', default=1.0, help='Factor to multiply the article content embeddings, as they might significantly affect the results')
 
 
 tf.flags.DEFINE_list('enabled_clicks_input_features_groups',
@@ -88,6 +91,7 @@ tf.flags.DEFINE_integer('training_hours_for_each_eval', default=5, help='Train m
 tf.flags.DEFINE_integer('save_results_each_n_evals', default=5, help='Saves to disk and uploads to GCS (ML Engine) the incremental evaluation results each N evaluations')
 tf.flags.DEFINE_bool('save_eval_sessions_negative_samples', default=False, help='Save negative samples of each session during evaluation')
 tf.flags.DEFINE_bool('save_eval_sessions_recommendations', default=False, help='Save CHAMELEON recommendations log during evaluation')
+tf.flags.DEFINE_bool('eval_cold_start', default=False, help='Evaluate item cold-start by recommender algorithm (WARNING: makes training much slower)')
 tf.flags.DEFINE_bool('use_local_cache_model_dir', default=False, help='Persists checkpoints and events in a local temp file, copying to GCS in the end of the process (useful for ML Engine jobs, because saving and loading checkpoints slows training job)')
 #Default param used by ML Engine to validate whether the path exists
 tf.flags.DEFINE_string('job-dir', default='./tmp', help='Job dir to save staging files')
@@ -250,7 +254,8 @@ def nar_module_model_fn(features, labels, mode, params):
               plot_histograms=params['save_histograms'],
               novelty_reg_factor=params['novelty_reg_factor'],
               diversity_reg_factor=params['diversity_reg_factor'], 
-              internal_features_config=internal_features_config
+              internal_features_config=internal_features_config,
+              eval_cold_start=params['eval_cold_start']
              )
     
     #Using these variables as global so that they persist across different train and eval
@@ -292,7 +297,8 @@ def nar_module_model_fn(features, labels, mode, params):
                                    articles_metadata=params['articles_metadata'],
                                    eval_negative_sample_relevance=params['eval_negative_sample_relevance'],
                                    eval_benchmark_classifiers=eval_benchmark_classifiers,
-                                   eval_metrics_by_session_position=params['eval_metrics_by_session_position']                                   
+                                   eval_metrics_by_session_position=params['eval_metrics_by_session_position'],
+                                   eval_cold_start=params['eval_cold_start']                                   
                                    )] 
     
     if mode == tf.estimator.ModeKeys.TRAIN:        
@@ -352,6 +358,7 @@ def build_estimator(model_dir,
             'novelty_reg_factor': FLAGS.novelty_reg_factor,
             'diversity_reg_factor': FLAGS.diversity_reg_factor,
             'eval_negative_sample_relevance': FLAGS.eval_negative_sample_relevance,
+            'eval_cold_start': FLAGS.eval_cold_start,
 
             #From pre-processing
             'session_features_config': session_features_config,
@@ -440,8 +447,12 @@ def main(unused_argv):
         acr_label_encoders, articles_metadata_df, content_article_embeddings_matrix = \
                 load_acr_module_resources(FLAGS.acr_module_resources_path)
 
-        #Min-max scaling of the ACR embedding for a compatible range with other input features for NAR module
-        content_article_embeddings_matrix = min_max_scale(content_article_embeddings_matrix, min_max_range=(-0.1,0.1))
+        #Apply l2-norm by sample
+        l2_normalizer_by_sample = Normalizer(norm='l2')
+        content_article_embeddings_matrix = l2_normalizer_by_sample.fit_transform(content_article_embeddings_matrix)
+        
+        #Rescaling content features        
+        content_article_embeddings_matrix = content_article_embeddings_matrix * FLAGS.content_embedding_scale_factor
 
         articles_features_config = get_articles_features_config(acr_label_encoders)
         articles_metadata = process_articles_metadata(articles_metadata_df, articles_features_config)
