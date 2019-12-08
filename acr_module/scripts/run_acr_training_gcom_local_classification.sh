@@ -10,10 +10,10 @@ python3 -m acr.acr_trainer_gcom \
 	--train_set_path_regex "${DATA_DIR}/articles_tfrecords/gcom_articles_tokenized_*.tfrecord.gz" \
 	--input_word_vocab_embeddings_path ${DATA_DIR}/pickles/acr_word_vocab_embeddings.pickle \
 	--input_label_encoders_path ${DATA_DIR}/pickles/acr_label_encoders.pickle \
-	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings.pickle \
+	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings_supervised_cnn.pickle \
 	--batch_size 64 \
 	--truncate_tokens_length 300 \
-	--training_epochs 5 \
+	--training_epochs 1 \
 	--learning_rate 3e-4 \
 	--dropout_keep_prob 1.0 \
 	--l2_reg_lambda 7e-4 \

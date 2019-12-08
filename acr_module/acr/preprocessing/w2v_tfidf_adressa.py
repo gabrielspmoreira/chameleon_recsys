@@ -177,10 +177,10 @@ if __name__ == '__main__':
 
 
 '''
-DATA_DIR="[REPLACE BY THE ADRESSA ARTICLES DATASET PATH]" && \
+DATA_DIR=/media/data/projects/personal/doutorado/adressa_news/data_transformed && \
 python3 -m acr.preprocessing.w2v_tfidf_adressa \
-    --input_articles_csv_path ${DATA_DIR}/adressa_articles_converted_to_csv_by_preproc.csv \
-    --input_word_embeddings_vocab ${DATA_DIR}/pickles/acr_word_vocab_embeddings.pickle \
-    --output_article_content_embeddings ${DATA_DIR}/pickles/article_content_embeddings_lsa_w2v_tfidf.pickle
+    --input_articles_csv_path ${DATA_DIR}/articles_tfrecords_v4_first_12_sent.csv \
+    --input_word_embeddings_vocab ${DATA_DIR}/pickles_v4/acr_word_vocab_embeddings_v4.pickle \
+    --output_article_content_embeddings ${DATA_DIR}/pickles_v4/article_content_embeddings_v4_lsa_w2v_tfidf.pickle
 
 '''

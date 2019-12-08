@@ -4,14 +4,14 @@ import numpy as np
 import re
 import nltk
 from sklearn.preprocessing import LabelEncoder
+from sklearn import utils
 
-from tqdm import tqdm
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.decomposition import PCA
 
 from ..utils import serialize, deserialize
 from .tokenization import tokenize_articles, nan_to_str, convert_tokens_to_int, get_words_freq
+
+from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.models.phrases import Phrases, Phraser
 
 from nltk.tokenize import word_tokenize
 
@@ -28,16 +28,10 @@ def create_args_parser():
             help='Input path for a pickle with label encoders (article_id, category_id, publisher_id).')
 
     parser.add_argument(
-            '--input_word_embeddings_vocab', default='',
-            help='Input path for a pickle with word embeddings and its vocab dict.')
-
-    parser.add_argument(
             '--output_article_content_embeddings', default='',
             help='')
     return parser
 
-
-VECTOR_SIZE = 250
 
 #############################################################################################
 #Based on text cleaner used to generate Brazilian Portuguese word embeddings:
@@ -174,92 +168,88 @@ def main():
     acr_label_encoders = load_acr_preprocessing_assets(args.input_label_encoders_path)
     news_df['id_encoded'] = acr_label_encoders['article_id'].transform(news_df['id'])
 
-
-    print('Loading word embeddings')
-    (word_vocab, word_embeddings_matrix) = deserialize(args.input_word_embeddings_vocab)
-
-
     #Sorting results by the encoded article Id, so that the matrix coincides and checking consistency
-    news_df = news_df.sort_values('id_encoded')    
-    
-    
+    news_df = news_df.sort_values('id_encoded')
+    ids_encoded = news_df['id_encoded'].values.flatten()
+    print('ids_encoded.shape', ids_encoded.shape)
     
     assert len(news_df) == len(acr_label_encoders['article_id'].classes_)
     assert news_df['id_encoded'].values[0] == 0
     assert news_df['id_encoded'].max()+1 == len(news_df)
-    assert len(news_df[pd.isnull(news_df['id_encoded'])]) == 0 
-    
-    del acr_label_encoders 
+    assert len(news_df[pd.isnull(news_df['id_encoded'])]) == 0
+    del acr_label_encoders
 
+    '''
+    print('Encoding categorical features')
+    article_id_encoder, category_id_encoder, domainid_encoder = process_cat_features(news_df)
+    print('Exporting LabelEncoders of categorical features: {}'.format(args.output_label_encoders))
+    save_article_cat_encoders(args.output_label_encoders, 
+                              article_id_encoder, 
+                              category_id_encoder, 
+                              domainid_encoder)
+    '''
 
     print('Tokenizing articles...')
     tokenized_articles = tokenize_articles(news_df['full_text'])
     del news_df
 
+    #print('Computing word frequencies...')
+    #words_freq = get_words_freq(tokenized_articles)
+    #print('Corpus vocabulary size: {}'.format(len(words_freq)))
 
-    print('TF-IDF...')
-    #print('TF-IDF...')
-    #https://mccormickml.com/2016/03/25/lsa-for-text-classification-tutorial/
-    vectorizer = TfidfVectorizer(analyzer='word', 
-                             tokenizer=lambda x: x,
-                             preprocessor=lambda x: x,
-                             token_pattern=None,
-                             stop_words=None, 
-                             ngram_range=(1, 1), max_df=0.4, 
-                             min_df=2, max_features=50000, 
-                             norm='l2', use_idf=True, 
-                             smooth_idf=True, sublinear_tf=False)
+    #Dicovering frequent bigrams
+    phrases = Phrases(tokenized_articles)
+    bigram = Phraser(phrases)
+    tg_phrases = Phrases(bigram[tokenized_articles])
+    trigram = Phraser(tg_phrases)
 
-    vectorized_contents = vectorizer.fit_transform(tokenized_articles)
-    print('vectorized_content.shape={}'.format(vectorized_contents.shape))
-    feature_names = np.array(vectorizer.get_feature_names())
-
-    print('Averaging word embeddings weighted by TF-IDF score')
-
-    invalid_embeddings = []
-    content_embeddings = []
-    for article_idx, vect_content in tqdm(enumerate(vectorized_contents)):
-        word_idxs = vect_content.nonzero()[1]
-        word_weights = vect_content[0,word_idxs].todense().tolist()[0]
-        word_names = feature_names[word_idxs]
-
-        words = []
-        weights = []
-        for word, weight in zip(word_names, word_weights):
-            if word in word_vocab:
-                words.append(word_embeddings_matrix[word_vocab[word]] * weight)
-                weights.append(weight)
-            #else:
-            #    print('Word not found: {}'.format(word))
-
-        if len(words) > 0:
-            avg_word_embedding = np.vstack(words).sum(axis=0) / sum(weights)
-        else:
-            print('No valid words for article_idx: {}'.format(article_idx))
-            invalid_embeddings.append(article_idx)
-            avg_word_embedding = word_embeddings_matrix[1] #Using the <UNK> token
+    print('Processing documents...')
+    tagged_data = [TaggedDocument(words=w, tags=[i]) for i, w in enumerate(trigram[bigram[tokenized_articles]])]
 
 
-        content_embeddings.append(avg_word_embedding)
+    print('Training doc2vec')
+    max_epochs = 30
+    vec_size = 250
+    alpha = 0.025
+    #cores = multiprocessing.cpu_count()
+    #DMM (Distributed Memory Mean) - See https://towardsdatascience.com/another-twitter-sentiment-analysis-with-python-part-6-doc2vec-603f11832504
+    model = Doc2Vec(vector_size=vec_size,
+                    alpha=alpha, 
+                    min_alpha=alpha,   
+                    window=5,
+                    negative=5,
+                    min_count=2,                                     
+                    max_vocab_size=100000,
+                    dm = 1,
+                    dm_mean=1,
+                    workers=6)
+      
+    model.build_vocab(tagged_data)
 
-    print('Total invalid embeddings: {}'.format(len(invalid_embeddings)))
-    print('Invalid embeddings: {}'.format(invalid_embeddings))
+    for epoch in range(max_epochs):
+        print('iteration {0}'.format(epoch))
+        model.train(tagged_data,
+                    #utils.shuffle([x for x in tagged_data]),
+                    total_examples=model.corpus_count,
+                    epochs=1)
+        # decrease the learning rate
+        model.alpha -= 0.0002
+        # fix the learning rate, no decay
+        model.min_alpha = model.alpha
 
-    print('Concatenating article content embeddings')
-    content_embeddings_concat = np.vstack(content_embeddings)
 
-    pca = PCA(n_components=250)
-    article_content_embeddings = pca.fit_transform(content_embeddings_concat)
+    #print('Encoding categorical features')
+    #article_id_encoder = process_cat_features(news_df)
 
-    print('article_content_embeddings.shape={}'.format(article_content_embeddings.shape))
+    print('Concatenating article content embeddings, making sure that they are sorted by the encoded article id')
+    #article_content_embeddings = np.vstack([model.docvecs[i] for i in list(news_df.index)])    
+    article_content_embeddings = np.vstack([model.docvecs[i] for i in ids_encoded])    
 
     print('Exporting article content embeddings')
     export_article_content_embeddings(article_content_embeddings, args.output_article_content_embeddings)
 
-    #Ps: To experiment with these Content embeddings, it is necessary to deserialize the "acr_articles_metadata_embeddings.pickle"
-    #trained by the ACR module, which is a tuple like (acr_label_encoders, articles_metadata_df, content_article_embeddings),
-    #substitute only the content_article_embedding instance by content embedddings produced by this script
-    # and serialize it again for further usage by NAR module
+    #Ps: To experiment with these doc2vec embeddings, it is necessary to deserialize "acr_articles_metadata_embeddings.pickle", substitute the content_article_embedding and serialize for further usage by NAR module
+    #This is made by acr_module/notebooks/ACR_Results_Visualization_Gcom_doc2vec.ipynb
 
 if __name__ == '__main__':
     main()
@@ -267,9 +257,8 @@ if __name__ == '__main__':
 
 '''
 DATA_DIR=/media/data/projects/personal/doutorado/gcom && \
-python3 -m acr.preprocessing.w2v_tfidf_gcom \
+python3 -m acr.preprocessing.doc2vec_gcom \
     --input_articles_csv_path ${DATA_DIR}/document_g1_exported/documents_g1_exported.csv \
     --input_label_encoders_path ${DATA_DIR}/data_preprocessed/pickles_v4/acr_label_encoders_v4.pickle \
-    --input_word_embeddings_vocab ${DATA_DIR}/data_preprocessed/pickles_v4/acr_word_vocab_embeddings_v4.pickle \
-    --output_article_content_embeddings ${DATA_DIR}/data_preprocessed/pickles_v4/article_content_embeddings_w2v_tfidf.pickle
+    --output_article_content_embeddings ${DATA_DIR}/data_preprocessed/pickles_v4/article_content_embeddings_doc2vec_v4_trigrams_30epochs.pickle
 '''
