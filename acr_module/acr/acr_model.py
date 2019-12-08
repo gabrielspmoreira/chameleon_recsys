@@ -401,6 +401,9 @@ class ACR_Model:
 
 
     def build_graph_autoencoder(self, input_text_embeddings):
+        '''
+        Based on https://github.com/erickrf/autoencoder
+        '''
         text_feature_extractor = self.text_feature_extractor
 
         with tf.variable_scope("autoencoder"):
