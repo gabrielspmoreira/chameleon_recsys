@@ -6,7 +6,7 @@ The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys
 
 The version [v1.7.3](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.7.3) was released for reproducibility of the experiments reported in our papers at the [INRA'19](https://arxiv.org/abs/1907.07629), co-located with [ACM RecSys'19](https://recsys.acm.org/recsys19/inra/) [3], and at the [IEEE Access journal](https://ieeexplore.ieee.org/document/8908688) [4]. The version v1.7.3 includes metrics for item coverage, novelty and diversity, and item-cold start, an optimized instantiation of CHAMELEON meta-architecture and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset). Furthermore, a recent baseline using Graph Neural Networks (SR-GNN) was included and some additional instantiations of the ACR module were implemented, using GRUs for both supervised and unsupervised training (Sequence Denoising Autoencoder) of the Article Content Embeddings.
 
-## References
+## Publications
 
 [1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. *CHAMELEON: A Deep Learning Meta-Architecture for News Recommender Systems*. In Proceedings of Doctoral Symposium of the 12th ACM RecSys'18, October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3240323.3240331
 
