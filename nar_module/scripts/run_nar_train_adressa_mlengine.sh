@@ -21,7 +21,7 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--use_local_cache_model_dir \
 	--train_set_path_regex  "${DATA_DIR}/data_transformed/sessions_tfrecords_by_hour/adressa_sessions_*.tfrecord.gz" \
 	--train_files_from 0 \
-	--train_files_up_to 384 \
+	--train_files_up_to 385 \
 	--training_hours_for_each_eval 5 \
 	--save_results_each_n_evals 1 \
 	--acr_module_resources_path ${DATA_DIR}/data_transformed/pickles/acr_articles_metadata_embeddings.pickle \
