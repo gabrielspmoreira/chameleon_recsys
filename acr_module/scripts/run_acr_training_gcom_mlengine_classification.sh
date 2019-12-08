@@ -21,7 +21,7 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--train_set_path_regex "${DATA_DIR}/articles_tfrecords/gcom_articles_tokenized_*.tfrecord.gz" \
 	--input_word_vocab_embeddings_path ${DATA_DIR}/pickles/acr_word_vocab_embeddings.pickle \
 	--input_label_encoders_path ${DATA_DIR}/pickles/acr_label_encoders.pickle \
-	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings.pickle \
+	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings_unsupervised_gru.pickle \
 	--batch_size 64 \
 	--truncate_tokens_length 300 \
 	--training_epochs 5 \

@@ -1,16 +1,25 @@
 # CHAMELEON - A Deep Learning Meta-Architecture for News Recommender Systems
 CHAMELEON is a Deep Learning Meta-Architecture for News Recommender Systems. It has being developed as part of the Doctoral research of Gabriel de Souza Pereira Moreira, at the Brazilian Aeronautics Institute of Technology ([ITA](http://www.ita.br/)).
 
-The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in a [paper](https://arxiv.org/abs/1808.00076) [1] published at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/), co-located with ACM RecSys.   
+The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in a [paper](https://arxiv.org/abs/1808.00076) [1] published at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/), co-located with ACM RecSys'18.   
 
-The version [v1.5](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.5) was released for reproducibility of the experiments reported in this paper ([arXiv pre-print](https://arxiv.org/abs/1904.10367)) [2]. For that version, metrics like item coverage, novelty and diversity were included, an optimized instantiation of CHAMELEON meta-architecture was implemented and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset).
+The version [v1.7.1](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.7.1) was released for reproducibility of the experiments reported in our papers at the [INRA'19](https://arxiv.org/abs/1907.07629), co-located with ACM RecSys'19 [2], and at the [IEEE Access journal](https://ieeexplore.ieee.org/document/8908688) [3]. The version v1.7.1 includes metrics for item coverage, novelty and diversity, and item-cold start, an optimized instantiation of CHAMELEON meta-architecture and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset). Furthermore, a recent baseline using Graph Neural Networks (SR-GNN) was included and some additional instantiations of the ACR module were implemented, using GRUs for both supervised and unsupervised training (Sequence Denoising Autoencoder) of the Article Content Embeddings.
 
-This implementation depends on **Python 3** (with Pandas, Scikit-learn and SciPy modules) and **TensorFlow 1.12**. CHAMELEON modules were implemented using TF [Estimators](https://www.tensorflow.org/guide/estimators) and [Datasets](https://www.tensorflow.org/guide/datasets).
+## References
+[1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
+
+[2] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. On the Importance of News Content Representation in Hybrid Neural Session-based Recommender Systems. In 7th International Workshop on News Recommendation and Analytics (INRA 2019), in conjunction with RecSys 2019, September 19, 2019, Copenhagen, Denmark. https://arxiv.org/abs/1907.07629
+
+[3] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. IEEE Access, v. 7, p. 169185-169203, 2019. https://doi.org/10.1109/ACCESS.2019.2954957
+
+## Implementation
+
+This implementation uses **Python 3** (with Pandas, Scikit-learn and SciPy modules) and **TensorFlow 1.12**. CHAMELEON modules were implemented using TF [Estimators](https://www.tensorflow.org/guide/estimators) and [Datasets](https://www.tensorflow.org/guide/datasets).
 
 The CHAMELEON modules training and evaluation can be performed either locally (GPU highly recommended) or using [Google Cloud Platform ML Engine](https://cloud.google.com/ml-engine/) managed service.
 
 ## Dataset for reproducibility
-The experiments reported in the paper *Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks* [2] use the following datasets:
+The experiments reported in the papers [2] and [3] use the following datasets:
 
 * [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in [1]. With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. This dataset used was kindly shared by [Globo.com](http://globo.com) for this research.
 
@@ -31,11 +40,13 @@ The CHAMELEON is a meta-architecture, in the sense of a reference architecture t
 ## Article Content Representation (ACR) module
 The *ACR* module is responsible to extract features from news articles text and metadata and to learn a distributed representations (embeddings) for each news article context.
 
-The inputs for the *ACR* module are (1) article metadata attributes (e.g., publisher) and (2) article textual content, represented as a sequence of word embeddings.
+The *ACR* module learns an *Article Content Embedding* for each article independently from the recorded user sessions. This is done for scalability reasons, because training user interactions and articles in a joint process would be computationally very expensive, given the typically large amount of daily user interactions in a typical news portal. Instead, the internal model is trained for a side classification task (e.g. predicting target metadata attributes of an article).
 
-In this instantiation of the *Textual Features Representation (TFR)* sub-module from ACR module, 1D CNNs over pre-trained Word2Vec embeddings was used to extract features from textual items.  Article's textual features and metadata inputs were combined by using a sequence of Fully Connected (FC) layers to produce *Article Content Embeddings*.
+The input for the *ACR *module is the article textual content, represented as a sequence of word embeddings (e.g., word2vec, GLoVE). 
 
-For scalability reasons, *Article Content Embeddings* are not directly trained for recommendation task, but for a side task of news metadata classification. For this architecture instantiation of CHAMELEON, they were trained to classify the category (editorial section) of news articles.
+The *ACR module* is composed of two sub-modules: *Textual Features Representation (TFR)* and *Content Embeddings Training (CET)*. The *TFR* sub-module is responsible to learn relevant features directly from the article textual content, and can be instantiated using CNN and RNNs, for example. 
+
+The *CET* sub-module is responsible to train the *Article Content Embeddings (ACE)* for a side task. It can be instantiated as a *supervised* or *unsupervised* learning model. In the *supervised approach*, the side task is to predict articles' metadata attributes, such as articles categories. In the *unsupervised approach*, the task is to reconstruct the original article text from the learned *ACE*, as an sequence autoencoder.
 
 After training, the *Article Content Embeddings* for news articles (NumPy matrix) are persisted into a Pickle dump file, for further usage by *NAR* module.
 
@@ -70,7 +81,7 @@ sions (model #100), available [here](http://vectors.nlpl.eu/repository)).
 
 ```bash
 cd acr_module && \
-DATA_DIR="[REPLACE BY THE GCOM ARTICLES DATASET PATH]" && \
+DATA_DIR="[REPLACE BY THE G1 ARTICLES DATASET PATH]" && \
 python3 -m acr.preprocessing.acr_preprocess_gcom \
 	--input_articles_csv_path ${DATA_DIR}/document_g1/documents_g1.csv \
  	--input_word_embeddings_path ${DATA_DIR}/word2vec/skip_s300.txt \
@@ -88,9 +99,11 @@ The ACR module can be trained either locally (example below) or using GCP ML Eng
 
 The path of pre-processed TFRecords is informed in *train_set_path_regex* parameter, as well as the other *ACR* exported assets (*input_word_vocab_embeddings_path* and *input_label_encoders_path*). The trained *Article Content Embeddings* (NumPy matrix), with the dimensions specified by *acr_embeddings_size*, are exported (Pickle dump file) after training to *output_acr_metadata_embeddings_path*, for further usage by the *NAR* module.
 
+You can train using an *supervised* or *unsupervised* instantiation of the *ACR* module by changing the --training_task parameter ("metadata_classification" or "autoencoder") and change the feature extraction using the --text_feature_extractor parameter ("CNN", "GRU").
+
 ```bash
 cd acr_module && \
-DATA_DIR="[REPLACE BY THE GCOM ARTICLES DATASET PATH]" && \
+DATA_DIR="[REPLACE BY THE G1 ARTICLES DATASET PATH]" && \
 JOB_PREFIX=gcom && \
 JOB_ID=`whoami`_${JOB_PREFIX}_`date '+%Y_%m_%d_%H%M%S'` && \
 MODEL_DIR='/tmp/chameleon/gcom/jobs/'${JOB_ID} && \
@@ -100,14 +113,15 @@ python3 -m acr.acr_trainer_gcom \
 	--train_set_path_regex "${DATA_DIR}/articles_tfrecords/gcom_articles_tokenized_*.tfrecord.gz" \
 	--input_word_vocab_embeddings_path ${DATA_DIR}/pickles/acr_word_vocab_embeddings.pickle \
 	--input_label_encoders_path ${DATA_DIR}/pickles/acr_label_encoders.pickle \
-	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings.pickle \
+	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings_supervised_cnn.pickle \
 	--batch_size 64 \
 	--truncate_tokens_length 300 \
-	--training_epochs 5 \
+	--training_epochs 1 \
 	--learning_rate 3e-4 \
 	--dropout_keep_prob 1.0 \
 	--l2_reg_lambda 7e-4 \
 	--text_feature_extractor "CNN" \
+	--training_task "metadata_classification" \
 	--cnn_filter_sizes "3,4,5" \
 	--cnn_num_filters 128 \
 	--acr_embeddings_size 250
@@ -117,11 +131,13 @@ python3 -m acr.acr_trainer_gcom \
 ## Next-Article Recommendation (NAR) module
 
 The *Next-Article Recommendation (NAR)* module is responsible for providing news articles recommendations for active sessions.
-Due to the high sparsity of users and their constant interests shift, the CHAMELEON instantiation reported in [1] leverages only session-based contextual information, ignoring possible users’ past sessions.
+Due to the high sparsity of users and their constant interests shift, these CHAMELEON instantiations leverages only session-based contextual information, ignoring possible users’ past sessions.
 
-The inputs for the *NAR* module are: (1) the pre-trained *Article Content Embedding* of the last viewed article; (2) the contextual properties of the articles (popularity and recency); and (3) the user context (e.g. time, location, and device). These inputs are combined by Fully Connected layers to produce a *User-Personalized Contextual Article Embedding*, whose representations might differ for the same article, depending on the user context and on the current article context (popularity and recency).
+The inputs for the *NAR* module are: (1) the pre-trained *Article Content Embedding* of the last viewed article; (2) the contextual properties of the articles (recent popularity and recency); and (3) the user context (e.g. time, location, and device). These inputs are combined by Fully Connected layers to produce a *User-Personalized Contextual Article Embedding*, whose representations might differ for the same article, depending on the user context and on the current article context (popularity and recency).
 
-The *NAR* module uses a type of Recurrent Neural Network (RNN) – the Long Short-Term Memory (LSTM) – to model the sequence of articles read by users in their sessions, represented by their *User-Personalized Contextual Article Embeddings*. For each article of the sequence, the RNN outputs a *Predicted Next-Article Embedding* – the expected representation of a news content the user would like to read next in the active session.
+These *NAR* module instantiations uses Recurrent Neural Networks (RNN) to model the sequence of articles read by users in their sessions, represented by their *User-Personalized Contextual Article Embeddings*. For each article of the sequence, the RNN outputs a *Predicted Next-Article Embedding* – the expected representation of a news content the user would like to read next in the active session.
+
+The *NAR* module is composed by three sub-modules: *Contextual Article Representation (CAR)*, *SEssion Representation (SER)*, and *Recommendations Ranking (RR)*. You can find more details about those sub-modules in [3].
 
 In most deep learning architectures proposed for RS, the neural network outputs a vector whose dimension is the number of available items. Such approach may work for domains were the items number is more stable, like movies and books. Although, in the dynamic scenario of news recommendations, where thousands of news stories are added and removed daily, such approach could require full retrain of the network, as often as new articles are published.  
 
@@ -148,24 +164,32 @@ The *NAR* module is trained and evaluated according to the following *Temporal O
 1. Train the NAR module with sessions within the active hour.
 2. Evaluate the NAR module with sessions within the next hour, for the task of the next-click prediction.
 
-The following baseline methods (described in more detail in [2]) are also trained and evaluated in parallel, as benchmarks for CHAMELEON accuracy:
-- **Co-occurrent (CO**
-- **Sequential Rules (SR)**
-- **Item-kNN**
-- **Vector Multiplication Session-Based kNN (V-SkNN)**
-- **Recently Popular (RP)**
-- **Content-Based (CB)**
+The following baseline methods (described in more detail in [3]) are also trained and evaluated in parallel, as benchmarks for CHAMELEON:
+- **Neural methods**
+-- **GRU4Rec**
+-- **SR-GNN**
+- **Association Rules-based methods**
+-- **Co-occurrent (CO)**
+-- **Sequential Rules (SR)**
+- **Neighborhood-based methods**
+-- **Item-kNN**
+-- **Vector Multiplication Session-Based kNN (V-SkNN)**
+- **Other methods**
+-- **Recently Popular (RP)**
+-- **Content-Based (CB)**
 
-The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity, described in [2].
+The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity, described in [3].
 
 #### Parameters
 The *train_set_path_regex* parameter expects the path (local or GCS) where the sessions' TFRecords were exported. It also expects the path of the articles metadata CSV (*acr_module_articles_metadata_csv_path*) and the Pickle dump file with the *Article Content Embeddings* (*acr_module_articles_content_embeddings_pickle_path*).
 
 It is necessary to specify a subset of files (representing sessions started in the same hour) for training and evaluation (*train_files_from* to *train_files_up_to*). The frequency of evaluation is specified in *training_hours_for_each_eval* (e.g. *training_hours_for_each_eval=5* means that after training on 5 hour's (files) sessions, the next hour (file) is used for evaluation. 
 
-To reproduce the experiments of [2], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
+To reproduce the experiments of [2], where different techniques of content representation are compared, you can generate the *ACEs* using the *ACR* supervised implementations using "acr_module/scripts/run_acr_training_*_classification.sh" (CNN or GRU) and the unsupervised implementation using "run_acr_training_*_autoencoder.sh". The files to generate the *ACEs* using baseline techniques reported in the paper (LSA, doc2vec, W2V*TF-IDF) are available at "acr_module/acr/preprocessing/". After generating the *ACE* (numpy array dumped using Pickle), you can test them with the *NAR* module to evaluate the effect of that content representation in the recommendation quality, setting the path of the Pickle file using the "--acr_module_resources_path" hyperparamenter.
 
-To reproduce the experiments reported in [2] with the novelty regularization in loss function, change the parameter *novelty_reg_factor*.
+To reproduce the experiments of [3], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
+
+To reproduce the experiments reported in [3] with the novelty regularization in loss function, change the parameter *novelty_reg_factor*.
 
 The *disable_eval_benchmarks* parameter disables training and evaluation of benchmark methods (useful for speed up). 
 
@@ -239,7 +263,7 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--staging-bucket ${JOBS_STAGING_DIR} \
 	--region us-central1 \
 	--python-version 3.5 \
-	--runtime-version 1.8 \
+	--runtime-version 1.12 \
 	--scale-tier basic-gpu \
 	--job-dir ${MODEL_DIR} \
 	-- \
@@ -247,7 +271,7 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--use_local_cache_model_dir \
 	--train_set_path_regex "${DATA_DIR}/sessions_tfrecords/sessions_hour_*.tfrecord.gz" \
 	--train_files_from 0 \
-	--train_files_up_to 384 \
+	--train_files_up_to 385 \
 	--training_hours_for_each_eval 5 \
 	--save_results_each_n_evals 1 \
 	--acr_module_articles_metadata_csv_path ${DATA_DIR}/articles_metadata.csv \
@@ -273,16 +297,9 @@ gcloud --project ${PROJECT_ID} ml-engine jobs submit training ${JOB_ID} \
 	--content_embedding_scale_factor 6.0 \
 	--enabled_articles_input_features_groups "category" \
 	--enabled_clicks_input_features_groups "time,device,location,referrer" \
-	--enabled_internal_features "recency,novelty,article_content_embeddings,item_clicked_embeddings" \
+	--enabled_internal_features "item_clicked_embeddings,recency,novelty,article_content_embeddings" \
 	--novelty_reg_factor 0.0 \
 	--disable_eval_benchmarks
 ```
 > [run_nar_train_gcom_mlengine.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/nar_module/scripts/run_nar_train_gcom_mlengine.sh)
 
-
-## References
-[1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
-
-[2] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. arXiv preprint arXiv:1904.10367, 49 pages.
-
-[3] Balázs Hidasi, Alexandros Karatzoglou, Linas Baltrunas, and Domonkos Tikk. 2016. Session-based recommendations with recurrent neural networks. In Proceedings of Forth International Conference on Learning Representations, 2016.
