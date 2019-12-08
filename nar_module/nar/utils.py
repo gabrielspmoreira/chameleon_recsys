@@ -235,3 +235,15 @@ def min_max_scale(vector, min_max_range=(-1.0,1.0)):
     scaler = MinMaxScaler(feature_range=min_max_range)
     norm_vector = scaler.fit_transform(vector)
     return norm_vector
+
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')    

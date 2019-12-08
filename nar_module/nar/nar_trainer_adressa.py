@@ -21,7 +21,8 @@ from sklearn.preprocessing import Normalizer
 
 from .utils import deserialize, resolve_files, chunks, merge_two_dicts, log_elapsed_time, append_lines_to_text_file, min_max_scale
 from .datasets import prepare_dataset_iterator
-from .nar_model import ClickedItemsState, ItemsStateUpdaterHook, NARModuleModel
+from .nar_model import ItemsStateUpdaterHook, NARModuleModel
+from .clicked_items_state import ClickedItemsState
 from .benchmarks import RecentlyPopularRecommender, ContentBasedRecommender, ItemCooccurrenceRecommender, ItemKNNRecommender, SessionBasedKNNRecommender, SequentialRulesRecommender
 
 from .nar_utils import load_acr_module_resources, load_nar_module_preprocessing_resources, save_eval_benchmark_metrics_csv, \
@@ -173,6 +174,11 @@ def get_session_features_config(nar_label_encoders_dict):
 
             #Referrer type
             'referrer_class': {'type': 'categorical', 'dtype': 'int'}, #'cardinality': 7}}}
+       
+            #Implicit feedback
+            #Needs to run NAR preprocessing again to update 'active_time_secs_by_word' feature based on the articles content extented with body (limited to 1000 tokens)
+            #'active_time_secs_by_word': {'type': 'numerical', 'dtype': 'float'},
+            #'user_elapsed_ms_since_last_click': {'type': 'numerical', 'dtype': 'float'},
         }
     }
 
