@@ -1,17 +1,20 @@
 # CHAMELEON - A Deep Learning Meta-Architecture for News Recommender Systems
-CHAMELEON is a Deep Learning Meta-Architecture for News Recommender Systems. It has being developed as part of the Doctoral research of Gabriel de Souza Pereira Moreira, at the Brazilian Aeronautics Institute of Technology ([ITA](http://www.ita.br/)).
+CHAMELEON is a Deep Learning Meta-Architecture for News Recommender Systems [1]. It has being developed as part of the Doctoral research of Gabriel de Souza Pereira Moreira, at the Brazilian Aeronautics Institute of Technology ([ITA](http://www.ita.br/)).
 
-The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in a [paper](https://arxiv.org/abs/1808.00076) [1] published at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/), co-located with ACM RecSys'18.   
+The initial version ([v1.0](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.0)) of CHAMELEON source code allows reproducibility of the experiments reported in a [paper](https://arxiv.org/abs/1808.00076) [2] published at the [DLRS'18](https://recsys.acm.org/recsys18/dlrs/), co-located with ACM RecSys'18.   
 
 
-The version [v1.7.3](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.7.3) was released for reproducibility of the experiments reported in our papers at the [INRA'19](https://arxiv.org/abs/1907.07629), co-located with ACM RecSys'19 [2], and at the [IEEE Access journal](https://ieeexplore.ieee.org/document/8908688) [3]. The version v1.7.3 includes metrics for item coverage, novelty and diversity, and item-cold start, an optimized instantiation of CHAMELEON meta-architecture and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset). Furthermore, a recent baseline using Graph Neural Networks (SR-GNN) was included and some additional instantiations of the ACR module were implemented, using GRUs for both supervised and unsupervised training (Sequence Denoising Autoencoder) of the Article Content Embeddings.
+The version [v1.7.3](https://github.com/gabrielspmoreira/chameleon_recsys/commits/v1.7.3) was released for reproducibility of the experiments reported in our papers at the [INRA'19](https://arxiv.org/abs/1907.07629), co-located with [ACM RecSys'19](https://recsys.acm.org/recsys19/inra/) [3], and at the [IEEE Access journal](https://ieeexplore.ieee.org/document/8908688) [4]. The version v1.7.3 includes metrics for item coverage, novelty and diversity, and item-cold start, an optimized instantiation of CHAMELEON meta-architecture and experiments with two datasets are made available: [G1 (Globo.com)](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) and [Adressa](http://reclab.idi.ntnu.no/dataset). Furthermore, a recent baseline using Graph Neural Networks (SR-GNN) was included and some additional instantiations of the ACR module were implemented, using GRUs for both supervised and unsupervised training (Sequence Denoising Autoencoder) of the Article Content Embeddings.
 
 ## References
-[1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. News Session-Based Recommendations using Deep Neural Networks. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
 
-[2] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. On the Importance of News Content Representation in Hybrid Neural Session-based Recommender Systems. In 7th International Workshop on News Recommendation and Analytics (INRA 2019), in conjunction with RecSys 2019, September 19, 2019, Copenhagen, Denmark. https://arxiv.org/abs/1907.07629
+[1] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. *CHAMELEON: A Deep Learning Meta-Architecture for News Recommender Systems*. In Proceedings of Doctoral Symposium of the 12th ACM RecSys'18, October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3240323.3240331
 
-[3] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks. IEEE Access, v. 7, p. 169185-169203, 2019. https://doi.org/10.1109/ACCESS.2019.2954957
+[2] Gabriel de Souza Pereira Moreira, Felipe Ferreira, and Adilson Marques da Cunha. 2018. *News Session-Based Recommendations using Deep Neural Networks*. In 3rd Workshop on Deep Learning for Recommender Systems (DLRS 2018), October 6, 2018, Vancouver, BC, Canada. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3270323.3270328
+
+[3] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. *On the Importance of News Content Representation in Hybrid Neural Session-based Recommender Systems*. In 7th International Workshop on News Recommendation and Analytics (INRA 2019), in conjunction with RecSys 2019, September 19, 2019, Copenhagen, Denmark. https://arxiv.org/abs/1907.07629
+
+[4] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. *Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks*. IEEE Access, v. 7, p. 169185-169203, 2019. https://doi.org/10.1109/ACCESS.2019.2954957
 
 ## Implementation
 
@@ -20,9 +23,9 @@ This implementation uses **Python 3** (with Pandas, Scikit-learn and SciPy modul
 The CHAMELEON modules training and evaluation can be performed either locally (GPU highly recommended) or using [Google Cloud Platform ML Engine](https://cloud.google.com/ml-engine/) managed service.
 
 ## Dataset for reproducibility
-The experiments reported in the papers [2] and [3] use the following datasets:
+The experiments reported in the papers [3] and [4] use the following datasets:
 
-* [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in [1]. With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. This dataset used was kindly shared by [Globo.com](http://globo.com) for this research.
+* [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in [2]. With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. This dataset used was kindly shared by [Globo.com](http://globo.com) for this research.
 
 * [SmartMedia Adressa dataset](http://reclab.idi.ntnu.no/dataset) - This dataset contains approximately 20
 million page visits from a Norwegian news portal [91]. In our experiments we used 16 days of the full dataset, which is available upon request, and includes article text and click events of about 2 million users and 13,000 articles.
@@ -161,36 +164,28 @@ python3 -m nar.preprocessing.nar_preprocess_gcom \
 ```
 
 ### Training and evaluating the NAR module
-The *NAR* module is trained and evaluated according to the following *Temporal Offline Evaluation Method*, described in [1]:
+The *NAR* module is trained and evaluated according to the following *Temporal Offline Evaluation Method*, described in [2]:
 1. Train the NAR module with sessions within the active hour.
 2. Evaluate the NAR module with sessions within the next hour, for the task of the next-click prediction.
 
-The following baseline methods (described in more detail in [3]) are also trained and evaluated in parallel, as benchmarks for CHAMELEON:
-- **Neural methods**
--- **GRU4Rec**
--- **SR-GNN**
-- **Association Rules-based methods**
--- **Co-occurrent (CO)**
--- **Sequential Rules (SR)**
-- **Neighborhood-based methods**
--- **Item-kNN**
--- **Vector Multiplication Session-Based kNN (V-SkNN)**
-- **Other methods**
--- **Recently Popular (RP)**
--- **Content-Based (CB)**
+The following baseline methods (described in more detail in [4]) are also trained and evaluated in parallel, as benchmarks for CHAMELEON:
+- **Neural methods**: **GRU4Rec**, **SR-GNN**
+- **Association Rules-based methods**: **Co-occurrent (CO)**, **Sequential Rules (SR)**
+- **Neighborhood-based methods**: **Item-kNN**, **Vector Multiplication Session-Based kNN (V-SkNN)**
+- **Other methods**: **Recently Popular (RP)**, **Content-Based (CB)**
 
-The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity, described in [3].
+The choosen evaluation metrics were **Hit-Rate@N** and **MRR@N** for accuracy, **COV** for catalog coverage, **ESI-R** and **ESI-RR** for novelty, and **EILD-R** and **EILD-RR** for diversity, described in [4].
 
 #### Parameters
 The *train_set_path_regex* parameter expects the path (local or GCS) where the sessions' TFRecords were exported. It also expects the path of the articles metadata CSV (*acr_module_articles_metadata_csv_path*) and the Pickle dump file with the *Article Content Embeddings* (*acr_module_articles_content_embeddings_pickle_path*).
 
 It is necessary to specify a subset of files (representing sessions started in the same hour) for training and evaluation (*train_files_from* to *train_files_up_to*). The frequency of evaluation is specified in *training_hours_for_each_eval* (e.g. *training_hours_for_each_eval=5* means that after training on 5 hour's (files) sessions, the next hour (file) is used for evaluation. 
 
-To reproduce the experiments of [2], where different techniques of content representation are compared, you can generate the *ACEs* using the *ACR* supervised implementations using "acr_module/scripts/run_acr_training_*_classification.sh" (CNN or GRU) and the unsupervised implementation using "run_acr_training_*_autoencoder.sh". The files to generate the *ACEs* using baseline techniques reported in the paper (LSA, doc2vec, W2V*TF-IDF) are available at "acr_module/acr/preprocessing/". After generating the *ACE* (numpy array dumped using Pickle), you can test them with the *NAR* module to evaluate the effect of that content representation in the recommendation quality, setting the path of the Pickle file using the "--acr_module_resources_path" hyperparamenter.
+To reproduce the experiments of [3], where different techniques of content representation are compared, you can generate the *ACEs* using the *ACR* supervised implementations using "acr_module/scripts/run_acr_training_\*_classification.sh" (CNN or GRU) and the unsupervised implementation using "run_acr_training_\*_autoencoder.sh". The files to generate the *ACEs* using baseline techniques reported in the paper (LSA, doc2vec, W2V*TF-IDF) are available at "acr_module/acr/preprocessing/". After generating the *ACE* (numpy array dumped using Pickle), you can test them with the *NAR* module to evaluate the effect of that content representation in the recommendation quality, setting the path of the Pickle file using the "--acr_module_resources_path" hyperparamenter.
 
-To reproduce the experiments of [3], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
+To reproduce the experiments of [4], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
 
-To reproduce the experiments reported in [3] with the novelty regularization in loss function, change the parameter *novelty_reg_factor*.
+To reproduce the experiments reported in [4] with the novelty regularization in loss function, change the parameter *novelty_reg_factor*.
 
 The *disable_eval_benchmarks* parameter disables training and evaluation of benchmark methods (useful for speed up). 
 
