@@ -9,8 +9,13 @@ import time
 import numpy as np
 import pandas as pd
 
+from ...evaluation import update_metrics, compute_metrics_results
+from ...metrics import HitRate, MRR
 
-def evaluate_sessions_batch_neg_samples(pr, streaming_metrics, test_data, items=None, cut_off=20, batch_size=100,
+
+def evaluate_sessions_batch_neg_samples(pr, streaming_metrics, test_data, clicked_items_state, items=None, cut_off=20, batch_size=100, 
+    count_clicks_in_test_items_not_in_train_set=0,
+    items_inverted_dict=None,
     session_key='SessionId', item_key='ItemId', time_key='Time', session_neg_samples_key='neg_samples'):
     '''
     Evaluates the GRU4Rec network wrt. recommendation accuracy measured by recall@N and MRR@N.
@@ -56,8 +61,8 @@ def evaluate_sessions_batch_neg_samples(pr, streaming_metrics, test_data, items=
     sc = time.clock();
     st = time.time();
 
-    for m in streaming_metrics:
-        m.reset()
+    #for m in streaming_metrics:
+    #    m.reset()
 
     pr.predict = None #In case someone would try to run with both items=None and not None on the same model without realizing that the predict function needs to be replaced
     test_data.sort_values([session_key, time_key, item_key], inplace=True)
@@ -87,36 +92,62 @@ def evaluate_sessions_batch_neg_samples(pr, streaming_metrics, test_data, items=
         minlen = (end[valid_mask]-start_valid).min()
         in_idx[valid_mask] = test_data[item_key].values[start_valid]
 
+
         for i in range(minlen-1):
   
 
             out_idx = test_data[item_key].values[start_valid+i+1]
             neg_samples = test_data[session_neg_samples_key].values[start_valid+i+1]
             
+            input_item_ids = in_idx
             if items is not None:
                 uniq_out = np.unique(np.array(out_idx, dtype=np.int32))
-                preds = pr.predict_next_batch(iters, in_idx, np.hstack([items, uniq_out[~np.in1d(uniq_out,items)]]), batch_size)
+                preds = pr.predict_next_batch(iters, input_item_ids, np.hstack([items, uniq_out[~np.in1d(uniq_out,items)]]), batch_size)
             else:
-                preds = pr.predict_next_batch(iters, in_idx, None, batch_size)
+                preds = pr.predict_next_batch(iters, input_item_ids, None, batch_size)
             
                 
             preds.fillna(0, inplace=True)
             in_idx[valid_mask] = out_idx  
-            
+
+
+            preds_items_list = []
+            labels = []
             j=0
             for part, series in preds.loc[:,valid_mask].iteritems(): 
                 
                 #Combining the next clicked item with a list of negative samples
-                items_to_predict = [out_idx[j]] + neg_samples[j]
-                
-                preds_items = preds.loc[items_to_predict].sort_values( part, ascending=False)[part]                                
+                items_to_predict = [out_idx[j]] + neg_samples[j]                
+                                
+                preds_items = preds.loc[items_to_predict].sort_values( part, ascending=False)[part]
 
-                preds_for_metrics = np.expand_dims(np.expand_dims(preds_items.index.values, 0), 0)
-                label_for_metrics = np.array([[out_idx[j]]])                
-                for m in streaming_metrics:
-                    m.add(preds_for_metrics, label_for_metrics)                    
+                preds_items_list.append(preds_items.index.values)
+                labels.append(out_idx[j])
 
                 j += 1
+
+            #for m in streaming_metrics:
+            #    m.add(preds_for_metrics, label_for_metrics)                    
+
+            #item_ids_to_original_vect = np.vectorize(lambda x: items_inverted_dict[x])
+
+            #clicked_items = input_item_ids[np.nonzero(input_item_ids)]
+            #clicked_items_original = item_ids_to_original_vect(clicked_items)
+
+            #labels_original_ids = item_ids_to_original_vect(label_for_metrics)
+            #preds_original_ids = item_ids_to_original_vect(preds_for_metrics)
+
+
+            preds_for_metrics = np.expand_dims(preds_items_list, 0)
+            label_for_metrics = np.array([labels])   
+
+            
+            labels_norm_pop = clicked_items_state.get_articles_recent_pop_norm()[label_for_metrics]
+            preds_norm_pop = clicked_items_state.get_articles_recent_pop_norm()[preds_for_metrics]
+
+            update_metrics(preds_for_metrics, label_for_metrics, labels_norm_pop, preds_norm_pop, 
+                           input_item_ids, streaming_metrics)
+
             
         start = start+minlen-1
         mask = np.arange(len(iters))[(valid_mask) & (end-start<=1)]
@@ -131,8 +162,20 @@ def evaluate_sessions_batch_neg_samples(pr, streaming_metrics, test_data, items=
                 
     print( 'END batch eval ', (time.clock()-sc), 'c / ', (time.time()-st), 's' )
     
-    metric_results = {}
-    for m in streaming_metrics:
-        metric_results[m.name()] = m.result()
+    #If there are clicks in test set items not viewed during training, as the method is not able
+    #to predict those items, assume that the recommendation was not correct in metrics
+    if count_clicks_in_test_items_not_in_train_set > 0:
+        #perc_test_items_not_found = count_clicks_in_test_items_not_in_train_set / (len(test_data)+count_clicks_in_test_items_not_in_train_set)
+        #print('{} ({}%) test set clicks in items not present in train set.'.format(count_clicks_in_test_items_not_in_train_set, perc_test_items_not_found))
+
+        #Include additional prediction errors (for accuracy metrics) when  next-clicked item is not available in train set
+        for metric in streaming_metrics: 
+            if metric.name in [HitRate.name, MRR.name]:
+                fake_targets = [[1]*count_clicks_in_test_items_not_in_train_set]    
+                fake_preds = np.array([[[0]]*count_clicks_in_test_items_not_in_train_set])
+                metric.add(fake_preds, fake_targets)
+
+
+    metric_results = compute_metrics_results(streaming_metrics, recommender='gru4rec')
     
     return metric_results

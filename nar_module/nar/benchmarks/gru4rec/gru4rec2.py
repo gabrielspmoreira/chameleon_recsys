@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 from collections import OrderedDict
 
+from ..candidate_sampling import CandidateSamplingManager
+
 srng = RandomStreams()
 
 class GRU4Rec:
@@ -89,7 +91,9 @@ class GRU4Rec:
                  adapt='adagrad', decay=0.9, grad_cap=0,
                  sigma=0, init_as_normal=False, reset_after_session=True, train_random_order=False, time_sort=True,
                  session_key='SessionId', item_key='ItemId', time_key='Time',
-                 last_clicks_buffer_size=2000):
+                 clicked_items_state=None
+                 #last_clicks_buffer_size=20000
+                 ):
         self.layers = layers
         self.n_epochs = n_epochs
         self.batch_size = batch_size
@@ -109,7 +113,8 @@ class GRU4Rec:
         self.lmbd = lmbd
         self.embedding = embedding
         self.time_sort = time_sort
-        self.last_clicks_buffer_size = last_clicks_buffer_size
+        #self.last_clicks_buffer_size = last_clicks_buffer_size
+        self.clicked_items_state = clicked_items_state
         if adapt == 'rmsprop': self.adapt = 'rmsprop'
         elif adapt == 'adagrad': self.adapt = 'adagrad'
         elif adapt == 'adadelta': self.adapt = 'adadelta'
@@ -227,7 +232,9 @@ class GRU4Rec:
 
     def init(self, data):
         #TODO: Parametrize Last Clicks buffer size
-        self.init_last_clicks_buffer()
+        #self.init_last_clicks_buffer()
+        #Initialize negative candidate sampling manager
+        self.init_candidate_sampling_manager()
 
         data.sort_values([self.session_key, self.time_key], inplace=True)
         offset_sessions = np.zeros(data[self.session_key].nunique()+1, dtype=np.int32)
@@ -432,6 +439,7 @@ class GRU4Rec:
             sample = sample.reshape((length, self.n_sample))
         return sample
 
+    '''
     def init_last_clicks_buffer(self):
         self.last_clicks_buffer = np.zeros(shape=[self.last_clicks_buffer_size], dtype=np.int64)
 
@@ -440,6 +448,15 @@ class GRU4Rec:
         self.last_clicks_buffer = np.hstack([np.array(items), self.last_clicks_buffer])[:self.last_clicks_buffer.shape[0]]
         #print('self.last_clicks_buffer.count_nonzero', np.count_nonzero(self.last_clicks_buffer))
 
+    def get_last_clicks_buffer(self):
+        return self.last_clicks_buffer
+    '''
+
+    def init_candidate_sampling_manager(self):
+        self.sampling_manager = CandidateSamplingManager(lambda: self.clicked_items_state.get_recent_clicks_buffer())
+
+
+    '''
     def generate_neg_samples_from_last_clicks_buffer(self):
         unique_items_buffer = np.unique(self.last_clicks_buffer)
         #print('unique_items_buffer', len(unique_items_buffer))
@@ -449,6 +466,16 @@ class GRU4Rec:
         if len(neg_items) < self.n_sample:
             neg_items = np.hstack([neg_items, np.zeros(self.n_sample-len(neg_items))])
         return neg_items
+    '''
+
+    def generate_neg_samples_from_last_clicks_buffer(self):
+        samples_with_repetition = self.sampling_manager.get_sample_from_recently_clicked_items_buffer(self.n_sample*20)
+        neg_items_original = self.sampling_manager.get_neg_items_click(samples_with_repetition, self.n_sample)
+        neg_items = self.item_original_to_ids_vect(neg_items_original)
+        return neg_items
+
+
+    
 
 
     def fit(self, data, retrain=False, sample_store=10000000, callback=None):
@@ -490,6 +517,17 @@ class GRU4Rec:
             data.sort_values([self.session_key, self.time_key], inplace=True)
             offset_sessions = np.zeros(data[self.session_key].nunique()+1, dtype=np.int32)
             offset_sessions[1:] = data.groupby(self.session_key).size().cumsum()
+
+        #Creating and inverted dictionary (from sequential ids to original ids)
+        self.items_dict = dict(zip(self.itemidmap.index, self.itemidmap.values))
+        #Adding to avoid error when retrieving zeroed samples
+        self.items_dict[0] = 0
+
+        self.item_original_to_ids_vect = np.vectorize(lambda x: self.items_dict[x] if x in self.items_dict else 0)
+
+        self.items_inverted_dict = dict(zip(self.itemidmap.values, self.itemidmap.index))
+        self.item_ids_to_original_vect = np.vectorize(lambda x: self.items_inverted_dict[x])
+
         X = T.ivector()
         Y = T.ivector()
         H_new, Y_pred, sampled_params = self.model(X, self.H, Y, self.dropout_p_hidden, self.dropout_p_embed)
@@ -519,6 +557,7 @@ class GRU4Rec:
             else:
                 print('No example store was used')
         data_items = data.ItemIdx.values
+        datetime_items = data[self.time_key].values
         for epoch in range(self.n_epochs):
             for i in range(len(self.layers)):
                 self.H[i].set_value(np.zeros((self.batch_size,self.layers[i]), dtype=theano.config.floatX), borrow=True)
@@ -533,6 +572,7 @@ class GRU4Rec:
             while not finished:
                 minlen = (end-start).min()          
                 out_idx = data_items[start]
+                out_datetime = datetime_items[start]
 
                 #print('Generating negative samples by batch')
                 sample = self.generate_neg_samples_from_last_clicks_buffer()
@@ -540,6 +580,9 @@ class GRU4Rec:
                 for i in range(minlen-1):
                     in_idx = out_idx
                     out_idx = data_items[start+i+1]
+
+                    in_datetime = out_datetime
+                    out_datetime = datetime_items[start+i+1]
                     if self.n_sample:
                         if sample_store:
                             if sample_pointer == generate_length:
@@ -551,12 +594,21 @@ class GRU4Rec:
                             #sample = self.generate_neg_samples(pop, 1)
                             pass
                         
+                        #print('out_idx', out_idx)
+                        #print('sample', sample)
+                        
                         y = np.hstack([out_idx, sample])
                     else:
                         y = out_idx
                     cost = train_function(in_idx, y)
 
-                    self.update_last_clicks_items_buffer(in_idx)
+                    
+                    clicked_items_original = self.item_ids_to_original_vect(in_idx)
+                    #print('in_idx', in_idx)
+                    #print('clicked_items_original', clicked_items_original)
+                    #self.update_last_clicks_items_buffer(in_idx)
+
+                    self.clicked_items_state.update_items_state(clicked_items_original, in_datetime) 
 
                     done += self.batch_size
                     c.append(cost)
