@@ -58,7 +58,7 @@ After training, the *Article Content Embeddings* for news articles (NumPy matrix
 
 #### Globo.com dataset
 
-It was not possible to share the articles' textual content for [Globo.com dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) due to licensing reasons. Although, it is not necessary to run the ACR module pre-processing and training commands (presented in the following subsections), since the trained Article Content Embeddings were already been provided with the [dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom).
+**It was not possible to share the articles' textual content for [Globo.com dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) due to licensing reasons. Although, it is not necessary to run the ACR module pre-processing and training commands (presented in the following subsections), since the trained Article Content Embeddings (*articles_embeddings.pickle*) and Article Metadata (*articles_metadata.csv*) were already been provided with the [dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom).**
 
 #### Adressa dataset
 
@@ -76,7 +76,8 @@ The creators of the [Adressa dataset](http://reclab.idi.ntnu.no/dataset) can mak
 
 
 ### Pre-processing data for the ACR module
-Here is an example of the command to pre-process articles text and metadata for the *ACR* module for Globo.com dataset.
+Here is an example of the command to pre-process articles text and metadata for the *ACR* module for **Adressa dataset**.
+P.s. Again, you will not be able to run the corresponding pre-processing script for the **G1 dataset**, as described in the previous section.
 
 It allows to specify the path of a CSV containing articles text and metadata (*input_articles_csv_path*), the path of pre-trained word embeddings and exports articles data into TFRecords format into *output_tf_records_path*, including the dictionaries that mapped tokenized words to sequences of int (*output_word_vocab_embeddings_path*) and metadata the categorical features encoders (*output_label_encoders*). 
 
@@ -84,16 +85,19 @@ The word embeddings (*input_word_embeddings_path* parameter) must be in [Gensim 
 sions (model #100), available [here](http://vectors.nlpl.eu/repository)).
 
 ```bash
+#!/bin/bash
 cd acr_module && \
-DATA_DIR="[REPLACE BY THE G1 ARTICLES DATASET PATH]" && \
-python3 -m acr.preprocessing.acr_preprocess_gcom \
-	--input_articles_csv_path ${DATA_DIR}/document_g1/documents_g1.csv \
- 	--input_word_embeddings_path ${DATA_DIR}/word2vec/skip_s300.txt \
- 	--vocab_most_freq_words 50000 \
+DATA_DIR="[REPLACE BY THE ADRESSA ARTICLES DATASET PATH]" && \
+python3 -m acr.preprocessing.acr_preprocess_adressa \
+	--input_articles_folder_path ${DATA_DIR}/data/contentdata \
+ 	--input_word_embeddings_path ${DATA_DIR}/word_embeddings/w2v_skipgram_no_lemma_aviskorpus_nowac_nbdigital/model.txt \
+ 	--vocab_most_freq_words 100000 \
+	--max_words_length 1000 \
  	--output_word_vocab_embeddings_path ${DATA_DIR}/pickles/acr_word_vocab_embeddings.pickle \
  	--output_label_encoders ${DATA_DIR}/pickles/acr_label_encoders.pickle \
- 	--output_tf_records_path "${DATA_DIR}/articles_tfrecords/gcom_articles_tokenized_*.tfrecord.gz" \
- 	--articles_by_tfrecord 5000
+ 	--output_tf_records_path "${DATA_DIR}/articles_tfrecords/adressa_articles_*.tfrecord.gz" \
+	--output_articles_csv_path "${DATA_DIR}/adressa_articles.csv" \
+ 	--articles_by_tfrecord 1000
 ```
 
 > From [acr_module/scripts/run_acr_preprocessing_gcom.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_preprocessing_gcom.sh)
@@ -106,31 +110,33 @@ The path of pre-processed TFRecords is informed in *train_set_path_regex* parame
 You can train using an *supervised* or *unsupervised* instantiation of the *ACR* module by changing the --training_task parameter ("metadata_classification" or "autoencoder") and change the feature extraction using the --text_feature_extractor parameter ("CNN", "GRU").
 
 ```bash
-cd acr_module && \
-DATA_DIR="[REPLACE BY THE G1 ARTICLES DATASET PATH]" && \
-JOB_PREFIX=gcom && \
+DATA_DIR="[REPLACE BY THE ADRESSA ARTICLES DATASET PATH]" && \
+JOB_PREFIX=adressa && \
 JOB_ID=`whoami`_${JOB_PREFIX}_`date '+%Y_%m_%d_%H%M%S'` && \
-MODEL_DIR='/tmp/chameleon/gcom/jobs/'${JOB_ID} && \
+MODEL_DIR='/tmp/chameleon/addressa/jobs/'${JOB_ID} && \
 echo 'Running training job and outputing to '${MODEL_DIR} && \
-python3 -m acr.acr_trainer_gcom \
+python3 -m acr.acr_trainer_adressa \
 	--model_dir ${MODEL_DIR} \
-	--train_set_path_regex "${DATA_DIR}/articles_tfrecords/gcom_articles_tokenized_*.tfrecord.gz" \
+	--train_set_path_regex "${DATA_DIR}/articles_tfrecords/adressa_articles_*.tfrecord.gz" \
 	--input_word_vocab_embeddings_path ${DATA_DIR}/pickles/acr_word_vocab_embeddings.pickle \
 	--input_label_encoders_path ${DATA_DIR}/pickles/acr_label_encoders.pickle \
 	--output_acr_metadata_embeddings_path ${DATA_DIR}/pickles/acr_articles_metadata_embeddings_supervised_cnn.pickle \
-	--batch_size 64 \
+	--batch_size 8 \
 	--truncate_tokens_length 300 \
 	--training_epochs 1 \
 	--learning_rate 3e-4 \
 	--dropout_keep_prob 1.0 \
-	--l2_reg_lambda 7e-4 \
+	--l2_reg_lambda 1e-5 \
 	--text_feature_extractor "CNN" \
 	--training_task "metadata_classification" \
 	--cnn_filter_sizes "3,4,5" \
 	--cnn_num_filters 128 \
+	--rnn_units 512 \
+	--rnn_layers 1 \
+	--rnn_direction "unidirectional" \
 	--acr_embeddings_size 250
 ```
-> From [run_acr_training_gcom_local.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_training_gcom_local.sh)
+> From [run_acr_training_adressa_local_classification.sh](https://github.com/gabrielspmoreira/chameleon_recsys/blob/master/acr_module/scripts/run_acr_training_adressa_local_classification.sh)
 
 ## Next-Article Recommendation (NAR) module
 
@@ -181,7 +187,7 @@ The *train_set_path_regex* parameter expects the path (local or GCS) where the s
 
 It is necessary to specify a subset of files (representing sessions started in the same hour) for training and evaluation (*train_files_from* to *train_files_up_to*). The frequency of evaluation is specified in *training_hours_for_each_eval* (e.g. *training_hours_for_each_eval=5* means that after training on 5 hour's (files) sessions, the next hour (file) is used for evaluation. 
 
-To reproduce the experiments of [3], where different techniques of content representation are compared, you can generate the *ACEs* using the *ACR* supervised implementations using "acr_module/scripts/run_acr_training_\*_classification.sh" (CNN or GRU) and the unsupervised implementation using "run_acr_training_\*_autoencoder.sh". The files to generate the *ACEs* using baseline techniques reported in the paper (LSA, doc2vec, W2V*TF-IDF) are available at "acr_module/acr/preprocessing/". After generating the *ACE* (numpy array dumped using Pickle), you can test them with the *NAR* module to evaluate the effect of that content representation in the recommendation quality, setting the path of the Pickle file using the "--acr_module_resources_path" hyperparamenter.
+To reproduce the experiments of [3] (**only for the *Adressa dataset*, as the articles text for the *G1 dataset* could not be provided**), where different techniques of content representation are compared, you can generate the *ACEs* using the *ACR* supervised implementations using "acr_module/scripts/run_acr_training_\*_classification.sh" (CNN or GRU) and the unsupervised implementation using "run_acr_training_\*_autoencoder.sh". The files to generate the *ACEs* using baseline techniques reported in the paper (LSA, doc2vec, W2V*TF-IDF) are available at "acr_module/acr/preprocessing/". After generating the *ACE* (numpy array dumped using Pickle), you can test them with the *NAR* module to evaluate the effect of that content representation in the recommendation quality, setting the path of the Pickle file using the "--acr_module_resources_path" hyperparamenter.
 
 To reproduce the experiments of [4], where additional features are used as inputs to the NAR module, you must change the following parameters according to the Input Configurations (IC) reported in the paper: *enabled_articles_input_features_groups*, *enabled_clicks_input_features_groups*, *enabled_internal_features*.
 

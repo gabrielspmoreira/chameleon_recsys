@@ -10,3 +10,10 @@ python3 -m acr.preprocessing.acr_preprocess_gcom \
  	--articles_by_tfrecord 5000
 
 
+#P.s. This script for the G1 dataset was kept as an example on how to preprocess articles textual content for the ACR module. 
+#Therefore, it cannot be executed without the original "documents_g1.csv" with the full text of articles content,
+# which was not made available due to licensing constraints from Globo.com
+#You can skip pre-processing and training the ACR module for G1, as the pre-trained article embeddings and encoded metadata are available
+# at https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom?select=articles_embeddings.pickle
+
+

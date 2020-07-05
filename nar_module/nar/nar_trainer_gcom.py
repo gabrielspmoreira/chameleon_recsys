@@ -20,7 +20,7 @@ from .datasets import prepare_dataset_iterator
 from .nar_model import ItemsStateUpdaterHook, NARModuleModel
 from .benchmarks import RecentlyPopularRecommender, ContentBasedRecommender, ItemCooccurrenceRecommender, ItemKNNRecommender, SessionBasedKNNRecommender, SequentialRulesRecommender
 
-from .nar_utils import load_acr_module_resources, load_nar_module_preprocessing_resources, save_eval_benchmark_metrics_csv, \
+from .nar_utils import save_eval_benchmark_metrics_csv, \
         upload_model_output_to_gcs, dowload_model_output_from_gcs
 from .clicked_items_state import ClickedItemsState
 
@@ -74,8 +74,6 @@ tf.flags.DEFINE_string('train_set_path_regex',
                     default='/train*.tfrecord', help='Train set regex')
 tf.flags.DEFINE_string('acr_module_resources_path',
                     default='/pickles', help='ACR module resources path')
-tf.flags.DEFINE_string('nar_module_preprocessing_resources_path',
-                    default='/pickles', help='NAR module preprocessing resources path')
 tf.flags.DEFINE_string('model_dir', default='./tmp',
                     help='Directory where save model checkpoints')
 tf.flags.DEFINE_string('warmup_model_dir', default=None,
@@ -98,14 +96,14 @@ FLAGS = tf.flags.FLAGS
 
 ALL_FEATURES = 'ALL'
 
-def get_articles_features_config(acr_label_encoders):
+def get_articles_features_config():
     articles_features_config = {
         #Required fields
         'article_id': {'type': 'categorical', 'dtype': 'int'},
         'created_at_ts': {'type': 'numerical', 'dtype': 'int'},
         #Additional metadata fields
         #'publisher_id': {'type': 'categorical', 'dtype': 'int'},
-        'category_id': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 461}
+        'category_id': {'type': 'categorical', 'dtype': 'int', 'cardinality': 461}
     }
 
     feature_groups = {
@@ -130,6 +128,17 @@ def get_articles_features_config(acr_label_encoders):
     return articles_features_config
 
 
+def load_acr_module_resources(articles_metadata_csv_path, articles_content_embeddings_pickle_path):  
+    
+    content_article_embeddings = deserialize(articles_content_embeddings_pickle_path)    
+    tf.logging.info("Read ACR article content embeddings: {}".format(content_article_embeddings.shape))
+
+    articles_metadata_df = pd.read_csv(tf.gfile.Open(articles_metadata_csv_path))
+    tf.logging.info("Read ACR articles metadata: {}".format(len(articles_metadata_df)))
+
+    return articles_metadata_df, content_article_embeddings
+
+
 def process_articles_metadata(articles_metadata_df, articles_features_config):
     articles_metadata = {}
     for feature_name in articles_features_config:
@@ -138,11 +147,11 @@ def process_articles_metadata(articles_metadata_df, articles_features_config):
 
 
 
-def get_session_features_config(nar_label_encoders):    
+def get_session_features_config():    
     session_features_config = {
         'single_features': {
             #Control features
-            'user_id': {'type': 'categorical', 'dtype': 'int'}, #Its 'int' for public dataset and 'bytes' for full dataset
+            'user_id': {'type': 'categorical', 'dtype': 'int', 'cardinality': 341193}, 
             #####'user_id': {'type': 'categorical', 'dtype': 'bytes'},
             #####'session_id_original': {'type': 'categorical', 'dtype': 'bytes'},
             'session_id': {'type': 'categorical', 'dtype': 'int'},
@@ -152,16 +161,16 @@ def get_session_features_config(nar_label_encoders):
         'sequence_features': {
             #Required sequence features
             'event_timestamp': {'type': 'numerical', 'dtype': 'int'},
-            'item_clicked': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 364047},
+            'item_clicked': {'type': 'categorical', 'dtype': 'int', 'cardinality': 364047},
 
             #Device           
-            'environment': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 5},
-            'deviceGroup': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 6},
-            'os': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 23},
+            'environment': {'type': 'categorical', 'dtype': 'int', 'cardinality': 5},
+            'deviceGroup': {'type': 'categorical', 'dtype': 'int', 'cardinality': 6},
+            'os': {'type': 'categorical', 'dtype': 'int', 'cardinality': 23},
 
             #Location
-            'country': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 12},
-            'region': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 29},
+            'country': {'type': 'categorical', 'dtype': 'int', 'cardinality': 12},
+            'region': {'type': 'categorical', 'dtype': 'int', 'cardinality': 29},
             #coord_lat scale is from -2.0  to 5.0
             #'coord_lat': {'type': 'numerical', 'dtype': 'float'},
             #coord_long scale is from -5.0  to 8.0
@@ -173,7 +182,7 @@ def get_session_features_config(nar_label_encoders):
             'local_weekday': {'type': 'numerical', 'dtype': 'float'},
 
             #Referrer type
-            'referrer_type': {'type': 'categorical', 'dtype': 'int'}, #, 'cardinality': 8},
+            'referrer_type': {'type': 'categorical', 'dtype': 'int', 'cardinality': 8},
        
             #Implicit feedback
             #t_clicks Scale is from -0.5 to 3.5
@@ -450,8 +459,9 @@ def main(unused_argv):
             tf.logging.info('Files copied from GCS to warm start training: {}'.format(local_files_after_download_to_debug))
 
         tf.logging.info('Loading ACR module assets')
-        acr_label_encoders, articles_metadata_df, content_article_embeddings_matrix = \
-                load_acr_module_resources(FLAGS.acr_module_resources_path)
+        articles_metadata_df, content_article_embeddings_matrix = \
+                load_acr_module_resources(FLAGS.acr_module_articles_metadata_csv_path, 
+                                          FLAGS.acr_module_articles_content_embeddings_pickle_path)
 
         #Min-max scaling of the ACR embedding for a compatible range with other input features for NAR module
         #######content_article_embeddings_matrix = min_max_scale(content_article_embeddings_matrix, min_max_range=(-0.1,0.1))
@@ -464,13 +474,10 @@ def main(unused_argv):
         content_article_embeddings_matrix = content_article_embeddings_matrix * FLAGS.content_embedding_scale_factor
         
 
-        articles_features_config = get_articles_features_config(acr_label_encoders)
+        articles_features_config = get_articles_features_config()
         articles_metadata = process_articles_metadata(articles_metadata_df, articles_features_config)
         
-        tf.logging.info('Loading NAR module preprocesing assets')
-        nar_label_encoders=load_nar_module_preprocessing_resources(FLAGS.nar_module_preprocessing_resources_path) 
-
-        session_features_config = get_session_features_config(nar_label_encoders)
+        session_features_config = get_session_features_config()
  
 
         tf.logging.info('Building NAR model')
