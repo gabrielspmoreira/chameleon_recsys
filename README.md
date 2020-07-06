@@ -16,6 +16,8 @@ The version [v1.7.3](https://github.com/gabrielspmoreira/chameleon_recsys/commit
 
 [4] Gabriel de Souza Pereira Moreira, Dietmar Jannach, and Adilson Marques da Cunha. 2019. *Contextual Hybrid Session-based News Recommendation with Recurrent Neural Networks*. IEEE Access, v. 7, p. 169185-169203, 2019. https://doi.org/10.1109/ACCESS.2019.2954957
 
+[5] Gabriel de Souza Pereira Moreira, 2019. *CHAMELEON: A Deep Learning Meta-Architecture for News Recommender Systems*. Doctoral Thesis, Instituto Tecnológico de Aeronáutica (ITA), Brazil. https://arxiv.org/abs/2001.04831
+
 ## Implementation
 
 This implementation uses **Python 3** (with Pandas, Scikit-learn and SciPy modules) and **TensorFlow 1.12**. CHAMELEON modules were implemented using TF [Estimators](https://www.tensorflow.org/guide/estimators) and [Datasets](https://www.tensorflow.org/guide/datasets).
@@ -23,7 +25,7 @@ This implementation uses **Python 3** (with Pandas, Scikit-learn and SciPy modul
 The CHAMELEON modules training and evaluation can be performed either locally (GPU highly recommended) or using [Google Cloud Platform ML Engine](https://cloud.google.com/ml-engine/) managed service.
 
 ## Dataset for reproducibility
-The experiments reported in the papers [3] and [4] use the following datasets:
+The experiments reported in the papers [3], [4] and [5] use the following datasets:
 
 * [Globo.com (G1) dataset](https://www.kaggle.com/gspmoreira/news-portal-user-interactions-by-globocom) - Globo.com is the most popular media company in Brazil. This dataset was originally shared by us in [2]. With this work, we publish a second version, which includes contextual information. The dataset comprises about 1 million user sessions, composed of 3 million clicks on 46,033 different articles. This dataset used was kindly shared by [Globo.com](http://globo.com) for this research.
 
