@@ -119,9 +119,9 @@ def get_articles_features_config():
                     del articles_features_config[feature]
 
     #Adding cardinality to categorical features
-    for feature_name in articles_features_config:
-        if feature_name in acr_label_encoders and articles_features_config[feature_name]['type'] == 'categorical':
-            articles_features_config[feature_name]['cardinality'] = len(acr_label_encoders[feature_name].classes_)
+    #for feature_name in articles_features_config:
+    #    if feature_name in acr_label_encoders and articles_features_config[feature_name]['type'] == 'categorical':
+    #        articles_features_config[feature_name]['cardinality'] = len(acr_label_encoders[feature_name].classes_)
 
 
     tf.logging.info('Article Features: {}'.format(articles_features_config))       
@@ -206,12 +206,12 @@ def get_session_features_config():
                 for feature in feature_groups[feature_group]:
                     del session_features_config['sequence_features'][feature]
 
-    #Adding cardinality to categorical features
-    for feature_groups_key in session_features_config:
-        features_group_config = session_features_config[feature_groups_key]
-        for feature_name in features_group_config:
-            if feature_name in nar_label_encoders and features_group_config[feature_name]['type'] == 'categorical':
-                features_group_config[feature_name]['cardinality'] = len(nar_label_encoders[feature_name].classes_)
+    ##Adding cardinality to categorical features
+    #for feature_groups_key in session_features_config:
+    #    features_group_config = session_features_config[feature_groups_key]
+    #    for feature_name in features_group_config:
+    #        if feature_name in nar_label_encoders and features_group_config[feature_name]['type'] == 'categorical':
+    #            features_group_config[feature_name]['cardinality'] = len(nar_label_encoders[feature_name].classes_)
 
     tf.logging.info('Session Features: {}'.format(session_features_config))
 
